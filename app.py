@@ -25,35 +25,36 @@ from backtester import (
     OptionStrategyTemplate, OptionsBacktester
 )
 
-# Load sample data
+# Load real crypto data
 @st.cache_data
 def load_data():
-    """Load sample crypto data for backtesting."""
-    # For demo purposes, let's create sample data
-    # In your actual deployment, load from your parquet files
-    np.random.seed(42)
-    dates = pd.date_range(start='2022-01-01', end='2025-01-01', freq='D')
+    """Load real crypto data for backtesting."""
+    data_dir = "candle_data"
     
-    # Generate realistic BTC price data with trends and volatility
-    initial_price = 30000
-    returns = np.random.normal(0.001, 0.04, len(dates))  # Daily returns with slight upward bias
-    prices = [initial_price]
+    # Available crypto datasets
+    crypto_files = {
+        "BTC-USDT": "BTC_USDT_1d.parquet",
+        "ETH-USDT": "ETH_USDT_1d.parquet", 
+        "PEPE-USDT": "PEPE_USDT_1d.parquet",
+        "DOGE-USDT": "DOGE_USDT_1d.parquet"
+    }
     
-    for ret in returns[1:]:
-        new_price = prices[-1] * (1 + ret)
-        prices.append(max(new_price, 1000))  # Prevent negative prices
+    datasets = {}
     
-    df = pd.DataFrame({
-        'timestamp': dates,
-        'open': prices,
-        'high': [p * (1 + abs(np.random.normal(0, 0.02))) for p in prices],
-        'low': [p * (1 - abs(np.random.normal(0, 0.02))) for p in prices],
-        'close': prices,
-        'volume': np.random.uniform(100000, 1000000, len(dates))
-    })
-    df.set_index('timestamp', inplace=True)
+    for crypto, filename in crypto_files.items():
+        filepath = os.path.join(data_dir, filename)
+        if os.path.exists(filepath):
+            df = pd.read_parquet(filepath)
+            # Ensure timestamp is the index
+            if 'timestamp' in df.columns:
+                df.set_index('timestamp', inplace=True)
+            elif df.index.name != 'timestamp':
+                df.index.name = 'timestamp'
+            datasets[crypto] = df
+        else:
+            st.warning(f"File not found: {filepath}")
     
-    return df
+    return datasets
 
 def create_strategy_diagram(strategy_name):
     """Create a simple visualization of the option strategy."""
@@ -68,45 +69,66 @@ def create_strategy_diagram(strategy_name):
         call_payoff = np.minimum(0, 1.05 - spot_range)  # Short call at 105% strike
         total_payoff = stock_payoff + call_payoff + 0.02  # Plus premium
         
-        fig.add_trace(go.Scatter(x=spot_range*100, y=stock_payoff*100, 
-                                name='Long Stock', line=dict(dash='dot')))
-        fig.add_trace(go.Scatter(x=spot_range*100, y=call_payoff*100, 
-                                name='Short Call', line=dict(dash='dash')))
+        # Color based on positive/negative
+        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
+        
         fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Total P&L', line=dict(width=3)))
+                                name='Total P&L', 
+                                line=dict(width=3, color='blue'),
+                                marker=dict(color=colors, size=2)))
         
     elif strategy_name == "Cash Secured Put":
         put_payoff = np.minimum(0, spot_range - 0.95) + 0.02  # Short put + premium
+        colors = ['green' if p >= 0 else 'red' for p in put_payoff]
+        
         fig.add_trace(go.Scatter(x=spot_range*100, y=put_payoff*100, 
-                                name='Cash Secured Put', line=dict(width=3)))
+                                name='Cash Secured Put', 
+                                line=dict(width=3, color='blue'),
+                                marker=dict(color=colors, size=2)))
         
     elif strategy_name == "Long Straddle":
         call_payoff = np.maximum(0, spot_range - 1.0) - 0.03
         put_payoff = np.maximum(0, 1.0 - spot_range) - 0.03
         total_payoff = call_payoff + put_payoff
+        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
+        
         fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Long Straddle', line=dict(width=3)))
+                                name='Long Straddle', 
+                                line=dict(width=3, color='blue'),
+                                marker=dict(color=colors, size=2)))
         
     elif strategy_name == "Iron Condor":
         # Simplified iron condor
         payoff = np.where(spot_range < 0.95, -(spot_range - 0.95) + 0.01,
                  np.where(spot_range > 1.05, -(spot_range - 1.05) + 0.01, 0.01))
+        colors = ['green' if p >= 0 else 'red' for p in payoff]
+        
         fig.add_trace(go.Scatter(x=spot_range*100, y=payoff*100, 
-                                name='Iron Condor', line=dict(width=3)))
+                                name='Iron Condor', 
+                                line=dict(width=3, color='blue'),
+                                marker=dict(color=colors, size=2)))
         
     elif strategy_name == "Bull Call Spread":
         long_call = np.maximum(0, spot_range - 1.0) - 0.03
         short_call = -(np.maximum(0, spot_range - 1.05) - 0.01)
         total_payoff = long_call + short_call
+        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
+        
         fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Bull Call Spread', line=dict(width=3)))
+                                name='Bull Call Spread', 
+                                line=dict(width=3, color='blue'),
+                                marker=dict(color=colors, size=2)))
         
     elif strategy_name == "Long Strangle":
         call_payoff = np.maximum(0, spot_range - 1.05) - 0.015
         put_payoff = np.maximum(0, 0.95 - spot_range) - 0.015
         total_payoff = call_payoff + put_payoff
+        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
+        
         fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Long Strangle', line=dict(width=3)))
+                                name='Long Strangle', 
+                                line=dict(width=3, color='blue'),
+                                marker=dict(color=colors, size=2)))
     
     fig.update_layout(
         title=f"{strategy_name} Payoff Diagram",
@@ -150,10 +172,20 @@ def format_stats_table(stats_str):
 
 def main():
     st.title("📈 Options Strategy Backtester")
-    st.markdown("Backtest various options strategies on crypto assets with customizable parameters.")
+    st.markdown("Backtest various options strategies on real cryptocurrency data with customizable parameters.")
     
     # Sidebar for strategy selection and parameters
     st.sidebar.header("Strategy Configuration")
+    
+    # Load datasets
+    datasets = load_data()
+    
+    if not datasets:
+        st.error("No data files found! Please ensure candle_data folder exists with parquet files.")
+        return
+    
+    # Crypto selection
+    selected_crypto = st.sidebar.selectbox("Select Cryptocurrency", list(datasets.keys()))
     
     # Strategy selection
     strategy_options = [
@@ -175,13 +207,13 @@ def main():
     # Strategy parameters
     st.sidebar.subheader("Strategy Parameters")
     
-    # Common parameters
+    # Common parameters with number inputs instead of sliders
     if selected_strategy == "Covered Call":
-        strike_pct = st.sidebar.slider("Strike Price (%)", 100, 120, 105) / 100
-        premium_pct = st.sidebar.slider("Premium (%)", 0.5, 5.0, 2.0) / 100
-        underlying_position = st.sidebar.number_input("Underlying Position", 0, 1000, 1)
-        underlying_held = st.sidebar.number_input("Already Held", 0, 1000, 1)
-        underlying_avg_cost = st.sidebar.number_input("Average Cost ($)", 0.0, 100000.0, 30000.0)
+        strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=100, max_value=120, value=105, step=1) / 100
+        premium_pct = st.sidebar.number_input("Premium (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1) / 100
+        underlying_position = st.sidebar.number_input("Underlying Position", min_value=0, max_value=1000, value=1, step=1)
+        underlying_held = st.sidebar.number_input("Already Held", min_value=0, max_value=1000, value=1, step=1)
+        underlying_avg_cost = st.sidebar.number_input("Average Cost ($)", min_value=0.0, max_value=100000.0, value=30000.0, step=100.0)
         
         strategy = OptionStrategyTemplate.covered_call(
             strike_pct=strike_pct,
@@ -192,8 +224,8 @@ def main():
         )
         
     elif selected_strategy == "Cash Secured Put":
-        strike_pct = st.sidebar.slider("Strike Price (%)", 80, 100, 95) / 100
-        premium_pct = st.sidebar.slider("Premium (%)", 0.5, 5.0, 2.0) / 100
+        strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=80, max_value=100, value=95, step=1) / 100
+        premium_pct = st.sidebar.number_input("Premium (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.cash_secured_put(
             strike_pct=strike_pct,
@@ -201,9 +233,9 @@ def main():
         )
         
     elif selected_strategy == "Long Straddle":
-        strike_pct = st.sidebar.slider("Strike Price (%)", 95, 105, 100) / 100
-        call_premium = st.sidebar.slider("Call Premium (%)", 1.0, 6.0, 3.0) / 100
-        put_premium = st.sidebar.slider("Put Premium (%)", 1.0, 6.0, 3.0) / 100
+        strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=95, max_value=105, value=100, step=1) / 100
+        call_premium = st.sidebar.number_input("Call Premium (%)", min_value=1.0, max_value=6.0, value=3.0, step=0.1) / 100
+        put_premium = st.sidebar.number_input("Put Premium (%)", min_value=1.0, max_value=6.0, value=3.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.long_straddle(
             strike_pct=strike_pct,
@@ -212,12 +244,12 @@ def main():
         )
         
     elif selected_strategy == "Iron Condor":
-        put_short = st.sidebar.slider("Put Short Strike (%)", 85, 100, 95) / 100
-        put_long = st.sidebar.slider("Put Long Strike (%)", 80, 95, 90) / 100
-        call_short = st.sidebar.slider("Call Short Strike (%)", 100, 115, 105) / 100
-        call_long = st.sidebar.slider("Call Long Strike (%)", 105, 120, 110) / 100
-        short_premium = st.sidebar.slider("Short Premium (%)", 0.5, 4.0, 2.0) / 100
-        long_premium = st.sidebar.slider("Long Premium (%)", 0.2, 2.0, 1.0) / 100
+        put_short = st.sidebar.number_input("Put Short Strike (%)", min_value=85, max_value=100, value=95, step=1) / 100
+        put_long = st.sidebar.number_input("Put Long Strike (%)", min_value=80, max_value=95, value=90, step=1) / 100
+        call_short = st.sidebar.number_input("Call Short Strike (%)", min_value=100, max_value=115, value=105, step=1) / 100
+        call_long = st.sidebar.number_input("Call Long Strike (%)", min_value=105, max_value=120, value=110, step=1) / 100
+        short_premium = st.sidebar.number_input("Short Premium (%)", min_value=0.5, max_value=4.0, value=2.0, step=0.1) / 100
+        long_premium = st.sidebar.number_input("Long Premium (%)", min_value=0.2, max_value=2.0, value=1.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.iron_condor(
             put_short=put_short,
@@ -229,10 +261,10 @@ def main():
         )
         
     elif selected_strategy == "Bull Call Spread":
-        long_strike = st.sidebar.slider("Long Strike (%)", 95, 105, 100) / 100
-        short_strike = st.sidebar.slider("Short Strike (%)", 100, 115, 105) / 100
-        long_premium = st.sidebar.slider("Long Premium (%)", 1.0, 5.0, 3.0) / 100
-        short_premium = st.sidebar.slider("Short Premium (%)", 0.2, 3.0, 1.0) / 100
+        long_strike = st.sidebar.number_input("Long Strike (%)", min_value=95, max_value=105, value=100, step=1) / 100
+        short_strike = st.sidebar.number_input("Short Strike (%)", min_value=100, max_value=115, value=105, step=1) / 100
+        long_premium = st.sidebar.number_input("Long Premium (%)", min_value=1.0, max_value=5.0, value=3.0, step=0.1) / 100
+        short_premium = st.sidebar.number_input("Short Premium (%)", min_value=0.2, max_value=3.0, value=1.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.bull_call_spread(
             long_strike=long_strike,
@@ -242,10 +274,10 @@ def main():
         )
         
     elif selected_strategy == "Long Strangle":
-        call_strike = st.sidebar.slider("Call Strike (%)", 100, 115, 105) / 100
-        put_strike = st.sidebar.slider("Put Strike (%)", 85, 100, 95) / 100
-        call_premium = st.sidebar.slider("Call Premium (%)", 0.5, 3.0, 1.5) / 100
-        put_premium = st.sidebar.slider("Put Premium (%)", 0.5, 3.0, 1.5) / 100
+        call_strike = st.sidebar.number_input("Call Strike (%)", min_value=100, max_value=115, value=105, step=1) / 100
+        put_strike = st.sidebar.number_input("Put Strike (%)", min_value=85, max_value=100, value=95, step=1) / 100
+        call_premium = st.sidebar.number_input("Call Premium (%)", min_value=0.5, max_value=3.0, value=1.5, step=0.1) / 100
+        put_premium = st.sidebar.number_input("Put Premium (%)", min_value=0.5, max_value=3.0, value=1.5, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.long_strangle(
             call_strike=call_strike,
@@ -256,13 +288,18 @@ def main():
     
     # Backtesting parameters
     st.sidebar.subheader("Backtesting Parameters")
-    expiry_days = st.sidebar.slider("Expiry Days", 1, 30, 7)
+    expiry_days = st.sidebar.number_input("Expiry Days", min_value=1, max_value=30, value=7, step=1)
     
     # Date range
-    default_start = datetime(2024, 1, 1)
-    default_end = datetime(2024, 12, 31)
-    start_date = st.sidebar.date_input("Start Date", default_start)
-    end_date = st.sidebar.date_input("End Date", default_end)
+    price_data = datasets[selected_crypto]
+    available_start = price_data.index.min().date()
+    available_end = price_data.index.max().date()
+    
+    default_start = max(available_start, datetime(2024, 1, 1).date())
+    default_end = min(available_end, datetime(2024, 12, 31).date())
+    
+    start_date = st.sidebar.date_input("Start Date", default_start, min_value=available_start, max_value=available_end)
+    end_date = st.sidebar.date_input("End Date", default_end, min_value=available_start, max_value=available_end)
     
     trade_frequency = st.sidebar.selectbox(
         "Trade Frequency", 
@@ -280,10 +317,12 @@ def main():
     
     # Load data and run backtest
     if st.sidebar.button("Run Backtest", type="primary"):
-        with st.spinner("Loading data and running backtest..."):
-            # Load data
-            price_data = load_data()
+        with st.spinner("Running backtest..."):
+            # Use selected crypto data
             backtester = OptionsBacktester(price_data)
+            
+            # Show data info
+            st.info(f"Using {selected_crypto} data: {len(price_data)} days from {price_data.index[0].date()} to {price_data.index[-1].date()}")
             
             # Run backtest
             stats_str = backtester.summary_stats(
@@ -308,10 +347,11 @@ def main():
             st.session_state.stats_str = stats_str
             st.session_state.fig = fig
             st.session_state.strategy_name = selected_strategy
+            st.session_state.crypto_name = selected_crypto
     
     # Display results
     if hasattr(st.session_state, 'stats_str'):
-        st.header(f"📊 {st.session_state.strategy_name} Backtest Results")
+        st.header(f"📊 {st.session_state.strategy_name} - {st.session_state.crypto_name} Backtest Results")
         
         # Create two columns for layout
         col1, col2 = st.columns([1, 2])
@@ -366,6 +406,18 @@ def main():
     
     else:
         st.info("👈 Configure your strategy parameters and click 'Run Backtest' to see results.")
+        
+        # Show dataset information
+        if datasets:
+            st.subheader("📊 Available Datasets")
+            for crypto, data in datasets.items():
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(f"{crypto}", f"{len(data)} days")
+                with col2:
+                    st.metric("Date Range", f"{data.index[0].date()} to {data.index[-1].date()}")
+                with col3:
+                    st.metric("Current Price", f"${data['close'].iloc[-1]:.2f}")
         
         # Show some educational content
         st.header("📚 About Options Strategies")

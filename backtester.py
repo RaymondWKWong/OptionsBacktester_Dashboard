@@ -495,7 +495,8 @@ class OptionsBacktester:
         cumulative_pnl = results['trade_pnl'].cumsum()
 
         # Calculate strategy-matched benchmark (buy underlying at same frequency)
-        results['underlying_return'] = ((results['expiry_price'] - results['entry_price']) / results['entry_price']) * abs(results['initial_investment'])
+        # Use the same investment amount for fair comparison
+        results['underlying_return'] = ((results['expiry_price'] - results['entry_price']) / results['entry_price']) * results['underlying_cost']
         cumulative_benchmark = results['underlying_return'].cumsum()
         
         # Calculate cumulative log returns for additional insight
