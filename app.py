@@ -45,11 +45,6 @@ def load_data():
         filepath = os.path.join(data_dir, filename)
         if os.path.exists(filepath):
             df = pd.read_parquet(filepath)
-            # Ensure timestamp is the index
-            if 'timestamp' in df.columns:
-                df.set_index('timestamp', inplace=True)
-            elif df.index.name != 'timestamp':
-                df.index.name = 'timestamp'
             datasets[crypto] = df
         else:
             st.warning(f"File not found: {filepath}")
@@ -57,85 +52,100 @@ def load_data():
     return datasets
 
 def create_strategy_diagram(strategy_name):
-    """Create a simple visualization of the option strategy."""
+    """Create a simple visualisation of the option strategy."""
     fig = go.Figure()
-    
-    # Strategy payoff diagrams (simplified)
+    # Strategy payoff diagrams
     spot_range = np.linspace(0.8, 1.2, 100)
+    
+    def add_colored_line(x_data, y_data):
+        """Add line segments colored by positive/negative values"""
+        # Create continuous line by duplicating zero crossings
+        x_extended = []
+        y_extended = []
+        colors = []
+        
+        for i in range(len(y_data)):
+            x_extended.append(x_data[i])
+            y_extended.append(y_data[i])
+            colors.append('green' if y_data[i] >= 0 else 'red')
+            
+            # Check for zero crossing
+            if i < len(y_data) - 1:
+                if (y_data[i] >= 0 and y_data[i+1] < 0) or (y_data[i] < 0 and y_data[i+1] >= 0):
+                    # Interpolate zero crossing point
+                    zero_x = x_data[i] + (x_data[i+1] - x_data[i]) * (-y_data[i] / (y_data[i+1] - y_data[i]))
+                    x_extended.append(zero_x)
+                    y_extended.append(0)
+                    colors.append('green' if y_data[i+1] >= 0 else 'red')
+        
+        # Split into segments by color
+        current_color = colors[0]
+        segment_x = [x_extended[0]]
+        segment_y = [y_extended[0]]
+        
+        for i in range(1, len(colors)):
+            if colors[i] == current_color:
+                segment_x.append(x_extended[i])
+                segment_y.append(y_extended[i])
+            else:
+                # End current segment and start new one
+                fig.add_trace(go.Scatter(x=segment_x, y=segment_y,
+                                        mode='lines',
+                                        line=dict(width=3, color=current_color),
+                                        showlegend=False))
+                current_color = colors[i]
+                segment_x = [x_extended[i-1], x_extended[i]]  # Include transition point
+                segment_y = [y_extended[i-1], y_extended[i]]
+        
+        # Add final segment
+        fig.add_trace(go.Scatter(x=segment_x, y=segment_y,
+                                mode='lines',
+                                line=dict(width=3, color=current_color),
+                                showlegend=False))
     
     if strategy_name == "Covered Call":
         # Long stock + short call
         stock_payoff = spot_range - 1.0
         call_payoff = np.minimum(0, 1.05 - spot_range)  # Short call at 105% strike
         total_payoff = stock_payoff + call_payoff + 0.02  # Plus premium
-        
-        # Color based on positive/negative
-        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
-        
-        fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Total P&L', 
-                                line=dict(width=3, color='blue'),
-                                marker=dict(color=colors, size=2)))
-        
+        add_colored_line(spot_range*100, total_payoff*100)
+    
     elif strategy_name == "Cash Secured Put":
         put_payoff = np.minimum(0, spot_range - 0.95) + 0.02  # Short put + premium
-        colors = ['green' if p >= 0 else 'red' for p in put_payoff]
-        
-        fig.add_trace(go.Scatter(x=spot_range*100, y=put_payoff*100, 
-                                name='Cash Secured Put', 
-                                line=dict(width=3, color='blue'),
-                                marker=dict(color=colors, size=2)))
-        
+        add_colored_line(spot_range*100, put_payoff*100)
+    
     elif strategy_name == "Long Straddle":
         call_payoff = np.maximum(0, spot_range - 1.0) - 0.03
         put_payoff = np.maximum(0, 1.0 - spot_range) - 0.03
         total_payoff = call_payoff + put_payoff
-        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
-        
-        fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Long Straddle', 
-                                line=dict(width=3, color='blue'),
-                                marker=dict(color=colors, size=2)))
-        
+        add_colored_line(spot_range*100, total_payoff*100)
+    
     elif strategy_name == "Iron Condor":
         # Simplified iron condor
         payoff = np.where(spot_range < 0.95, -(spot_range - 0.95) + 0.01,
-                 np.where(spot_range > 1.05, -(spot_range - 1.05) + 0.01, 0.01))
-        colors = ['green' if p >= 0 else 'red' for p in payoff]
-        
-        fig.add_trace(go.Scatter(x=spot_range*100, y=payoff*100, 
-                                name='Iron Condor', 
-                                line=dict(width=3, color='blue'),
-                                marker=dict(color=colors, size=2)))
-        
+                         np.where(spot_range > 1.05, -(spot_range - 1.05) + 0.01, 0.01))
+        add_colored_line(spot_range*100, payoff*100)
+    
     elif strategy_name == "Bull Call Spread":
         long_call = np.maximum(0, spot_range - 1.0) - 0.03
         short_call = -(np.maximum(0, spot_range - 1.05) - 0.01)
         total_payoff = long_call + short_call
-        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
-        
-        fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Bull Call Spread', 
-                                line=dict(width=3, color='blue'),
-                                marker=dict(color=colors, size=2)))
-        
+        add_colored_line(spot_range*100, total_payoff*100)
+    
     elif strategy_name == "Long Strangle":
         call_payoff = np.maximum(0, spot_range - 1.05) - 0.015
         put_payoff = np.maximum(0, 0.95 - spot_range) - 0.015
         total_payoff = call_payoff + put_payoff
-        colors = ['green' if p >= 0 else 'red' for p in total_payoff]
-        
-        fig.add_trace(go.Scatter(x=spot_range*100, y=total_payoff*100, 
-                                name='Long Strangle', 
-                                line=dict(width=3, color='blue'),
-                                marker=dict(color=colors, size=2)))
+        add_colored_line(spot_range*100, total_payoff*100)
     
     fig.update_layout(
         title=f"{strategy_name} Payoff Diagram",
-        xaxis_title="Spot Price (%)",
-        yaxis_title="P&L (%)",
+        xaxis_title="",
+        yaxis_title="",
+        xaxis=dict(showticklabels=False),
+        yaxis=dict(showticklabels=False),
         height=300,
-        showlegend=True
+        showlegend=False
     )
     fig.add_hline(y=0, line_color="gray", opacity=0.5)
     fig.add_vline(x=100, line_color="gray", opacity=0.5, line_dash="dash")
@@ -200,7 +210,6 @@ def main():
     selected_strategy = st.sidebar.selectbox("Select Strategy", strategy_options)
     
     # Show strategy diagram
-    st.sidebar.subheader("Strategy Visualization")
     strategy_fig = create_strategy_diagram(selected_strategy)
     st.sidebar.plotly_chart(strategy_fig, use_container_width=True)
     
@@ -212,8 +221,8 @@ def main():
         strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=100, max_value=120, value=105, step=1) / 100
         premium_pct = st.sidebar.number_input("Premium (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1) / 100
         underlying_position = st.sidebar.number_input("Underlying Position", min_value=0, max_value=1000, value=1, step=1)
-        underlying_held = st.sidebar.number_input("Already Held", min_value=0, max_value=1000, value=1, step=1)
-        underlying_avg_cost = st.sidebar.number_input("Average Cost ($)", min_value=0.0, max_value=100000.0, value=30000.0, step=100.0)
+        underlying_held = st.sidebar.number_input("Already Held", min_value=0, max_value=1000, value=0, step=1)
+        underlying_avg_cost = st.sidebar.number_input("Average Cost ($)", min_value=0.0, max_value=200000.0, value=118000.0, step=100.0)
         
         strategy = OptionStrategyTemplate.covered_call(
             strike_pct=strike_pct,
@@ -292,12 +301,24 @@ def main():
     
     # Date range
     price_data = datasets[selected_crypto]
+    if not isinstance(price_data.index, pd.DatetimeIndex):  # Ensure index is datetime
+        price_data.index = pd.to_datetime(price_data.index)
     available_start = price_data.index.min().date()
     available_end = price_data.index.max().date()
     
-    default_start = max(available_start, datetime(2024, 1, 1).date())
-    default_end = min(available_end, datetime(2024, 12, 31).date())
+    default_start = max(available_start, datetime(2024, 7, 31).date())
+    default_end = min(available_end, datetime(2025, 7, 31).date())
     
+    # Ensure all are datetime.date
+    if isinstance(available_start, pd.Timestamp):
+        available_start = available_start.date()
+    if isinstance(available_end, pd.Timestamp):
+        available_end = available_end.date()
+    if isinstance(default_start, pd.Timestamp):
+        default_start = default_start.date()
+    if isinstance(default_end, pd.Timestamp):
+        default_end = default_end.date()
+
     start_date = st.sidebar.date_input("Start Date", default_start, min_value=available_start, max_value=available_end)
     end_date = st.sidebar.date_input("End Date", default_end, min_value=available_start, max_value=available_end)
     
@@ -405,7 +426,7 @@ def main():
             st.plotly_chart(st.session_state.fig, use_container_width=True)
     
     else:
-        st.info("👈 Configure your strategy parameters and click 'Run Backtest' to see results.")
+        st.info("Configure strategy parameters with sidebar and click 'Run Backtest' to see results.")
         
         # Show dataset information
         if datasets:
@@ -418,36 +439,6 @@ def main():
                     st.metric("Date Range", f"{data.index[0].date()} to {data.index[-1].date()}")
                 with col3:
                     st.metric("Current Price", f"${data['close'].iloc[-1]:.2f}")
-        
-        # Show some educational content
-        st.header("📚 About Options Strategies")
-        
-        with st.expander("Covered Call"):
-            st.write("""
-            **Strategy**: Long stock + Short call option
-            **Market Outlook**: Neutral to slightly bullish
-            **Profit**: Limited (stock appreciation up to strike + premium collected)
-            **Loss**: Unlimited downside protection only by premium collected
-            **Best When**: You own the stock and expect sideways/modest upward movement
-            """)
-        
-        with st.expander("Cash Secured Put"):
-            st.write("""
-            **Strategy**: Short put option with cash to buy stock if assigned
-            **Market Outlook**: Neutral to bullish
-            **Profit**: Limited to premium collected
-            **Loss**: Stock price minus strike minus premium
-            **Best When**: You want to buy stock at a lower price and collect premium while waiting
-            """)
-        
-        with st.expander("Long Straddle"):
-            st.write("""
-            **Strategy**: Long call + Long put at same strike
-            **Market Outlook**: High volatility expected (direction unknown)
-            **Profit**: Unlimited in either direction
-            **Loss**: Limited to total premium paid
-            **Best When**: Expecting big price movement but unsure of direction
-            """)
 
 if __name__ == "__main__":
     main()

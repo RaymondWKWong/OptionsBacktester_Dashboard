@@ -53,7 +53,7 @@ Thumbs.db
 
 # Data files
 *.csv
-*.parquet
+# *.parquet
 *.xlsx
 *.json
 data/

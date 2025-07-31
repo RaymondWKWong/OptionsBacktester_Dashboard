@@ -173,47 +173,47 @@ class OptionStrategyTemplate:
             underlying_position=0  # No stock position
         )
     
-    @staticmethod
-    def iron_condor(put_short: float = 0.95, put_long: float = 0.90,
-                    call_short: float = 1.05, call_long: float = 1.10,
-                    short_premium: float = 0.02, long_premium: float = 0.01):
-        """Create iron condor: Short put spread + Short call spread."""
-        return OptionStrategy(
-            name="Iron Condor",
-            legs=[
-                # Put spread
-                OptionLeg(  # Sell higher strike put
-                    option_type=OptionType.PUT,
-                    position_type=PositionType.SHORT,
-                    strike_pct=put_short,  # 5% OTM put
-                    premium_pct=short_premium,  # Premium collected
-                    quantity=1
-                ),
-                OptionLeg(  # Buy lower strike put for protection
-                    option_type=OptionType.PUT,
-                    position_type=PositionType.LONG,
-                    strike_pct=put_long,  # 10% OTM put
-                    premium_pct=long_premium,  # Premium paid
-                    quantity=1
-                ),
-                # Call spread
-                OptionLeg(  # Sell lower strike call
-                    option_type=OptionType.CALL,
-                    position_type=PositionType.SHORT,
-                    strike_pct=call_short,  # 5% OTM call
-                    premium_pct=short_premium,  # Premium collected
-                    quantity=1
-                ),
-                OptionLeg(  # Buy higher strike call for protection
-                    option_type=OptionType.CALL,
-                    position_type=PositionType.LONG,
-                    strike_pct=call_long,  # 10% OTM call
-                    premium_pct=long_premium,  # Premium paid
-                    quantity=1
-                )
-            ],
-            underlying_position=0  # No stock position
-        )
+    # @staticmethod
+    # def iron_condor(put_short: float = 0.95, put_long: float = 0.90,
+    #                 call_short: float = 1.05, call_long: float = 1.10,
+    #                 short_premium: float = 0.02, long_premium: float = 0.01):
+    #     """Create iron condor: Short put spread + Short call spread."""
+    #     return OptionStrategy(
+    #         name="Iron Condor",
+    #         legs=[
+    #             # Put spread
+    #             OptionLeg(  # Sell higher strike put
+    #                 option_type=OptionType.PUT,
+    #                 position_type=PositionType.SHORT,
+    #                 strike_pct=put_short,  # 5% OTM put
+    #                 premium_pct=short_premium,  # Premium collected
+    #                 quantity=1
+    #             ),
+    #             OptionLeg(  # Buy lower strike put for protection
+    #                 option_type=OptionType.PUT,
+    #                 position_type=PositionType.LONG,
+    #                 strike_pct=put_long,  # 10% OTM put
+    #                 premium_pct=long_premium,  # Premium paid
+    #                 quantity=1
+    #             ),
+    #             # Call spread
+    #             OptionLeg(  # Sell lower strike call
+    #                 option_type=OptionType.CALL,
+    #                 position_type=PositionType.SHORT,
+    #                 strike_pct=call_short,  # 5% OTM call
+    #                 premium_pct=short_premium,  # Premium collected
+    #                 quantity=1
+    #             ),
+    #             OptionLeg(  # Buy higher strike call for protection
+    #                 option_type=OptionType.CALL,
+    #                 position_type=PositionType.LONG,
+    #                 strike_pct=call_long,  # 10% OTM call
+    #                 premium_pct=long_premium,  # Premium paid
+    #                 quantity=1
+    #             )
+    #         ],
+    #         underlying_position=0  # No stock position
+    #     )
     
     @staticmethod
     def bull_call_spread(long_strike: float = 1.00, short_strike: float = 1.05,
@@ -533,6 +533,7 @@ class OptionsBacktester:
             row=1, col=1
         )
         
+        # 2. P&L distribution histogram
         # Add log return distribution
         fig.add_trace(
             go.Histogram(x=results['log_return'].dropna(), nbinsx=30, 

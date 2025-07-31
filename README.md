@@ -5,10 +5,10 @@ A comprehensive Streamlit web application for backtesting various options strate
 ## Features
 
 - **Interactive Strategy Selection**: Choose from 6 common options strategies
-- **Strategy Visualization**: See payoff diagrams for each strategy
+- **Strategy Visualisation**: See payoff diagrams for each strategy
 - **Customizable Parameters**: Adjust strike prices, premiums, and positions
 - **Comprehensive Backtesting**: Test strategies over historical data
-- **Rich Analytics**: Detailed performance metrics and visualizations
+- **Rich Analytics**: Detailed performance metrics and visualisations
 - **Beautiful UI**: Clean, professional interface with intuitive controls
 
 ## Supported Strategies
@@ -39,7 +39,7 @@ A comprehensive Streamlit web application for backtesting various options strate
 3. Adjust strategy parameters (strikes, premiums, etc.)
 4. Set backtesting parameters (date range, frequency)
 5. Click "Run Backtest" to see results
-6. Analyze performance metrics and visualizations
+6. Analyze performance metrics and visualisations
 
 ## Performance Metrics
 
@@ -50,7 +50,7 @@ A comprehensive Streamlit web application for backtesting various options strate
 - Monthly performance breakdown
 - Rolling performance analysis
 
-## Visualizations
+## visualisations
 
 The dashboard provides 8 different analytical charts:
 - Cumulative P&L vs benchmark
