@@ -32,7 +32,7 @@ Can add additional option legs within backtest.py to create new option strategie
 3. Adjust strategy parameters (strikes, premiums, etc.)
 4. Set backtesting parameters (date range, frequency)
 5. Click "Run Backtest" to see results
-6. Analyze performance metrics and visualisations
+6. Analyse performance metrics and visualisations
 
 ## Performance Metrics
 
