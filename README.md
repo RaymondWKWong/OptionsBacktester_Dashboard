@@ -1,17 +1,10 @@
 # Options Strategy Backtester Dashboard
 
-A comprehensive Streamlit web application for backtesting various options strategies on cryptocurrency data.
-
-## Features
-
-- **Interactive Strategy Selection**: Choose from 6 common options strategies
-- **Strategy Visualisation**: See payoff diagrams for each strategy
-- **Customizable Parameters**: Adjust strike prices, premiums, and positions
-- **Comprehensive Backtesting**: Test strategies over historical data
-- **Rich Analytics**: Detailed performance metrics and visualisations
-- **Beautiful UI**: Clean, professional interface with intuitive controls
+Simple options strategy backtester over historical data with performance metrics and visualisations
 
 ## Supported Strategies
+
+Can add additional option legs within backtest.py to create new option strategies
 
 1. **Covered Call** - Long stock + Short call
 2. **Cash Secured Put** - Short put with cash backing
@@ -50,7 +43,7 @@ A comprehensive Streamlit web application for backtesting various options strate
 - Monthly performance breakdown
 - Rolling performance analysis
 
-## visualisations
+## Visualisations
 
 The dashboard provides 8 different analytical charts:
 - Cumulative P&L vs benchmark
@@ -62,14 +55,6 @@ The dashboard provides 8 different analytical charts:
 - Entry vs expiry price scatter
 - Monthly P&L heatmap
 
-## Data
-
-Currently uses simulated cryptocurrency price data for demonstration. Can be easily adapted to use real market data from various sources.
-
 ## License
 
-MIT License - Feel free to use and modify as needed.
-
-## Contributing
-
-Pull requests welcome! Please feel free to submit improvements or bug fixes.
+This project is for educational and research purposes.
