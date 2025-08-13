@@ -22,91 +22,78 @@ class OptionLeg:
     option_type: OptionType
     position_type: PositionType
     strike_pct: float  # Strike as % of spot (1.05 = 5% above spot)
-    premium_pct: float  # Premium as % of spot
     quantity: int = 1  # Number of contracts
 
     def calculate_strike(self, entry_price):
         """Calculate strike price based on entry price and strike percentage."""
         return entry_price * self.strike_pct
-    
-    def calculate_premium(self, entry_price):
-        """Calculate premium based on entry price and premium percentage."""
-        return entry_price * self.premium_pct
 
-    def calculate_payoff(self, entry_price: float, expiry_price: float):
+    def calculate_payoff(self, entry_price: float, expiry_price: float, premium: float):
         """Calculate payoff based on spot price at expiry."""
         strike = self.calculate_strike(entry_price)  # Calculate strike price based on given entry price and strike percentage
-        premium = self.calculate_premium(entry_price)  # Calculate premium based on given entry price and premium percentage
 
         # Calculate payoff based on option type and position type
         # CALL OPTION
         if self.option_type == OptionType.CALL:
+            intrinsic = max(0.0, expiry_price - strike)
             if self.position_type == PositionType.LONG:  # Long call
-                return max(0, expiry_price - strike) - premium # Payoff if expiry price is above strike for long call
+                return intrinsic - premium  # Payoff if expiry price is above strike for long call
             else:  # Short call
-                return premium - max(0, expiry_price - strike)  # Payoff if expiry price is below strike for short call
+                return premium - intrinsic  # Payoff if expiry price is below strike for short call
 
         # PUT OPTION
-        else:  
+        else:
+            intrinsic = max(0.0, strike - expiry_price)
             if self.position_type == PositionType.LONG:  # Long put
-                return max(0, strike - expiry_price) - premium  # Payoff if expiry price is below strike for long put
+                return intrinsic - premium  # Payoff if expiry price is below strike for long put
             else:  # Short put
-                return premium - max(0, strike - expiry_price)  # Payoff if expiry price is above strike for short put
+                return premium - intrinsic  # Payoff if expiry price is above strike for short put
 
-    def calculate_pnl(self, entry_price: float, expiry_price: float):
-        """Calculate PnL based on quantity, entry price and expiry price."""
-        payoff = self.calculate_payoff(entry_price, expiry_price)
+    def calculate_pnl(self, entry_price: float, expiry_price: float, premium: float):
+        """Calculate PnL based on quantity, entry price and priced premium."""
+        payoff = self.calculate_payoff(entry_price, expiry_price, premium)
         return payoff * self.quantity
 
 # Create options class container to hold multiple option legs to create strategies (i.e. covered call, straddle, etc.)
+@dataclass
 class OptionStrategy:
     """Container to hold defined multiple option legs to create strategies (e.g. covered call, straddle)."""
-    def __init__(self, name: str, legs: list[OptionLeg], underlying_position: int = 0, underlying_held: int = 0, underlying_avg_cost: float = 0.0):
-        self.name = name  # Name of the strategy (e.g. "Long Straddle", "Covered Call", "Iron Condor", etc.)
-        self.legs = legs  # List of options leg objects
-        self.underlying_position = underlying_position  # Number of shares to hold for strategy
-        self.underlying_held = underlying_held  # Number of underlying assets held  
-        self.underlying_avg_cost = underlying_avg_cost  # Average cost of the underlying asset if held
+    name: str  # Name of the strategy (e.g. "Long Straddle", "Covered Call", "Iron Condor", etc.)
+    legs: list  # List of options leg objects
+    underlying_position: int = 0   # Number of shares to hold for strategy
+    underlying_held: int = 0  # Number of underlying assets held  
+    underlying_avg_cost: float = None  # Average cost of the underlying asset if held
 
-        # Calculate how many new shares we need to buy/sell
-        self.underlying_position_buy = underlying_position - underlying_held
+    def calculate_total_pnl(self, entry_price: float, expiry_price: float, premiums_per_leg: list):
+        """Calculate total PnL broken down by option legs and underlying."""
+        # Option PnL across all legs
+        option_pnl = 0.0
+        strike_prices = []
 
-    def calculate_total_pnl(self, entry_price: float, expiry_price: float):
-        """Calculate total PnL for the strategy based on entry and expiry prices."""
-        # PnL from existing shares (held before strategy) if provided
-        underlying_held_pnl = 0.0
-        if self.underlying_held != 0:
-            if self.underlying_avg_cost is not None:
-                underlying_held_pnl = self.underlying_held * (expiry_price - self.underlying_avg_cost)
-        # PnL from new shares
-        underlying_position_pnl = 0.0
-        if self.underlying_position_buy != 0:  # Can be positive (buy) or negative (sell)
-            underlying_position_pnl = self.underlying_position_buy * (expiry_price - entry_price)
-        # Calculate total underlying PnL if holding underlying asset
-        underlying_pnl = 0.0
-        if self.underlying_position > 0:
-            underlying_pnl = underlying_held_pnl + underlying_position_pnl
+        for leg, prem in zip(self.legs, premiums_per_leg or []):
+            strike = leg.calculate_strike(entry_price)
+            strike_prices.append(strike)
+            option_pnl += leg.calculate_pnl(entry_price, expiry_price, prem)
 
-        # Calculate PnL from all option legs
-        option_pnl = sum(leg.calculate_pnl(entry_price, expiry_price) for leg in self.legs)
+        # Existing underlying PnL (if any)
+        existing_underlying_pnl = 0.0
+        if self.underlying_held and self.underlying_avg_cost is not None:
+            existing_underlying_pnl = self.underlying_held * (expiry_price - self.underlying_avg_cost)
 
-        # Calculate total PnL
-        trade_pnl = underlying_pnl + option_pnl
+        # New underlying acquired for this strategy (e.g. covered call long 1 underlying)
+        new_underlying_pnl = 0.0
+        if self.underlying_position:
+            new_underlying_pnl = self.underlying_position * (expiry_price - entry_price)
 
-        # Calculate underlying asset cost if underlying purchased
-        underlying_cost = self.underlying_position * entry_price
-        # Calculate total premium paid for options
-        total_premium = sum(leg.calculate_premium(entry_price) * leg.quantity for leg in self.legs)
-        # Calculate initial investment (underlying position cost + total premium paid for options)
-        initial_investment = underlying_cost + total_premium
+        # Total PnL for current trade
+        trade_pnl = option_pnl + existing_underlying_pnl + new_underlying_pnl
 
         return {
-            'underlying_held_pnl': underlying_held_pnl,
-            'underlying_position_pnl': underlying_position_pnl,
-            'underlying_pnl': underlying_pnl,
-            'options_pnl': option_pnl,
             'trade_pnl': trade_pnl,
-            'initial_investment': initial_investment
+            'option_pnl': option_pnl,
+            'existing_underlying_pnl': existing_underlying_pnl,
+            'new_underlying_pnl': new_underlying_pnl,
+            'strike_prices': strike_prices
         }
 
 # Create option strategy templates to easily create common strategies
@@ -114,16 +101,15 @@ class OptionStrategyTemplate:
     """Collection of common option strategies with default parameters."""
     
     @staticmethod
-    def covered_call(strike_pct: float = 1.05, premium_pct: float = 0.02, underlying_position: int=100, underlying_held: int = 0, underlying_avg_cost: float = None):
-        """Create covered call strategy: Long 100 shares + Short 1 OTM Call."""
+    def covered_call(strike_pct: float = 1.05, underlying_position: int = 1, underlying_held: int = 0, underlying_avg_cost: float = None):
+        """Create covered call strategy: Long underlying + Short 1 OTM Call. Premium is priced at entry via Black–Scholes."""
         return OptionStrategy(
             name="Covered Call",
             legs=[
                 OptionLeg(
                     option_type=OptionType.CALL,
                     position_type=PositionType.SHORT,  # Sell call
-                    strike_pct=strike_pct,  # Default 5% OTM
-                    premium_pct=premium_pct,  # Premium collected
+                    strike_pct=strike_pct,
                     quantity=1
                 )
             ],
@@ -133,16 +119,15 @@ class OptionStrategyTemplate:
         )
     
     @staticmethod
-    def cash_secured_put(strike_pct: float = 0.95, premium_pct: float = 0.02):
-        """Create cash secured put strategy: Short 1 OTM Put."""
+    def cash_secured_put(strike_pct: float = 0.95):
+        """Create cash secured put strategy: Short 1 OTM Put. Premium is priced at entry via Black–Scholes."""
         return OptionStrategy(
             name="Cash Secured Put",
             legs=[
                 OptionLeg(
                     option_type=OptionType.PUT,
                     position_type=PositionType.SHORT,  # Sell put
-                    strike_pct=strike_pct,  # Default 5% OTM
-                    premium_pct=premium_pct,  # Premium collected
+                    strike_pct=strike_pct,
                     quantity=1
                 )
             ],
@@ -150,90 +135,80 @@ class OptionStrategyTemplate:
         )
     
     @staticmethod
-    def long_straddle(strike_pct: float = 1.00, call_premium: float = 0.03, put_premium: float = 0.03):
-        """Create long straddle: Long 1 ATM Call + Long 1 ATM Put."""
+    def long_straddle(strike_pct: float = 1.00):
+        """Create long straddle: Long 1 ATM Call + Long 1 ATM Put. Premium is priced at entry via Black–Scholes."""
         return OptionStrategy(
             name="Long Straddle",
             legs=[
                 OptionLeg(
                     option_type=OptionType.CALL,
                     position_type=PositionType.LONG,  # Buy call
-                    strike_pct=strike_pct,  # ATM strike
-                    premium_pct=call_premium,  # Premium paid
+                    strike_pct=strike_pct,
                     quantity=1
                 ),
                 OptionLeg(
                     option_type=OptionType.PUT,
                     position_type=PositionType.LONG,  # Buy put
-                    strike_pct=strike_pct,  # Same strike as call
-                    premium_pct=put_premium,  # Premium paid
+                    strike_pct=strike_pct,
                     quantity=1
                 )
             ],
             underlying_position=0  # No stock position
         )
     
-    # @staticmethod
-    # def iron_condor(put_short: float = 0.95, put_long: float = 0.90,
-    #                 call_short: float = 1.05, call_long: float = 1.10,
-    #                 short_premium: float = 0.02, long_premium: float = 0.01):
-    #     """Create iron condor: Short put spread + Short call spread."""
-    #     return OptionStrategy(
-    #         name="Iron Condor",
-    #         legs=[
-    #             # Put spread
-    #             OptionLeg(  # Sell higher strike put
-    #                 option_type=OptionType.PUT,
-    #                 position_type=PositionType.SHORT,
-    #                 strike_pct=put_short,  # 5% OTM put
-    #                 premium_pct=short_premium,  # Premium collected
-    #                 quantity=1
-    #             ),
-    #             OptionLeg(  # Buy lower strike put for protection
-    #                 option_type=OptionType.PUT,
-    #                 position_type=PositionType.LONG,
-    #                 strike_pct=put_long,  # 10% OTM put
-    #                 premium_pct=long_premium,  # Premium paid
-    #                 quantity=1
-    #             ),
-    #             # Call spread
-    #             OptionLeg(  # Sell lower strike call
-    #                 option_type=OptionType.CALL,
-    #                 position_type=PositionType.SHORT,
-    #                 strike_pct=call_short,  # 5% OTM call
-    #                 premium_pct=short_premium,  # Premium collected
-    #                 quantity=1
-    #             ),
-    #             OptionLeg(  # Buy higher strike call for protection
-    #                 option_type=OptionType.CALL,
-    #                 position_type=PositionType.LONG,
-    #                 strike_pct=call_long,  # 10% OTM call
-    #                 premium_pct=long_premium,  # Premium paid
-    #                 quantity=1
-    #             )
-    #         ],
-    #         underlying_position=0  # No stock position
-    #     )
+    @staticmethod
+    def iron_condor(put_short: float = 0.95, put_long: float = 0.90,
+                    call_short: float = 1.05, call_long: float = 1.10):
+        """Create iron condor: Short put spread + Short call spread. Premium is priced at entry via Black–Scholes."""
+        return OptionStrategy(
+            name="Iron Condor",
+            legs=[
+                # Put spread
+                OptionLeg(  # Sell higher strike put
+                    option_type=OptionType.PUT,
+                    position_type=PositionType.SHORT,
+                    strike_pct=put_short,
+                    quantity=1
+                ),
+                OptionLeg(  # Buy lower strike put for protection
+                    option_type=OptionType.PUT,
+                    position_type=PositionType.LONG,
+                    strike_pct=put_long,
+                    quantity=1
+                ),
+                # Call spread
+                OptionLeg(  # Sell lower strike call
+                    option_type=OptionType.CALL,
+                    position_type=PositionType.SHORT,
+                    strike_pct=call_short,
+                    quantity=1
+                ),
+                OptionLeg(  # Buy higher strike call for protection
+                    option_type=OptionType.CALL,
+                    position_type=PositionType.LONG,
+                    strike_pct=call_long,
+                    quantity=1
+                )
+            ],
+            underlying_position=0  # No stock position
+        )
     
     @staticmethod
-    def bull_call_spread(long_strike: float = 1.00, short_strike: float = 1.05,
-                        long_premium: float = 0.03, short_premium: float = 0.01):
-        """Create bull call spread: Long lower strike call + Short higher strike call."""
+    def bull_call_spread(long_strike: float = 1.00, short_strike: float = 1.05):
+        """Create bull call spread: Long lower strike call + Short higher strike call. Premium is priced at entry via Black–Scholes."""
         return OptionStrategy(
             name="Bull Call Spread",
             legs=[
                 OptionLeg(  # Buy lower strike call
                     option_type=OptionType.CALL,
                     position_type=PositionType.LONG,
-                    strike_pct=long_strike,  # ATM or slightly ITM
-                    premium_pct=long_premium,  # Premium paid
+                    strike_pct=long_strike,
                     quantity=1
                 ),
                 OptionLeg(  # Sell higher strike call
                     option_type=OptionType.CALL,
                     position_type=PositionType.SHORT,
-                    strike_pct=short_strike,  # OTM
-                    premium_pct=short_premium,  # Premium collected
+                    strike_pct=short_strike,
                     quantity=1
                 )
             ],
@@ -241,24 +216,21 @@ class OptionStrategyTemplate:
         )
     
     @staticmethod
-    def long_strangle(call_strike: float = 1.05, put_strike: float = 0.95,
-                     call_premium: float = 0.015, put_premium: float = 0.015):
-        """Create long strangle: Long OTM Call + Long OTM Put."""
+    def long_strangle(call_strike: float = 1.05, put_strike: float = 0.95):
+        """Create long strangle: Long OTM Call + Long OTM Put. Premium is priced at entry via Black–Scholes."""
         return OptionStrategy(
             name="Long Strangle",
             legs=[
                 OptionLeg(  # Buy OTM call
                     option_type=OptionType.CALL,
                     position_type=PositionType.LONG,
-                    strike_pct=call_strike,  # OTM call
-                    premium_pct=call_premium,  # Premium paid
+                    strike_pct=call_strike,
                     quantity=1
                 ),
                 OptionLeg(  # Buy OTM put
                     option_type=OptionType.PUT,
                     position_type=PositionType.LONG,
-                    strike_pct=put_strike,  # OTM put
-                    premium_pct=put_premium,  # Premium paid
+                    strike_pct=put_strike,
                     quantity=1
                 )
             ],
@@ -270,104 +242,196 @@ class OptionsBacktester:
     def __init__(self, price_data: pd.DataFrame):
         self.price_data = price_data.copy()
 
-    def backtest_strategy(self, strategy: OptionStrategy, expiry_days: int = None, start_date: str = None, end_date: str = None, trade_frequency: str = 'non_overlapping', entry_day_of_week: int = None):
-        '''Systematic backtesting of option strategy over given date range - loops and places trades on each date (CHANGE SO RULE BASED)'''
+    # --- Black–Scholes helpers (per-unit premiums) ---
+    @staticmethod
+    def _N(x):
+        """Standard normal CDF."""
+        return 0.5 * (1.0 + erf(x / np.sqrt(2.0)))
+
+    @staticmethod
+    def _bs_call(S, K, r, sigma, T):
+        """Black–Scholes call premium per unit."""
+        if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+            return 0.0
+        vol_sqrt_t = sigma * np.sqrt(T)
+        d1 = (np.log(S / K) + (r + 0.5 * sigma * sigma) * T) / vol_sqrt_t
+        d2 = d1 - vol_sqrt_t
+        return S * OptionsBacktester._N(d1) - K * np.exp(-r * T) * OptionsBacktester._N(d2)
+
+    @staticmethod
+    def _bs_put(S, K, r, sigma, T):
+        """Black–Scholes put premium per unit (put-call parity)."""
+        call = OptionsBacktester._bs_call(S, K, r, sigma, T)
+        return call - S + K * np.exp(-r * T)
+
+    def _price_leg_premium(self, leg: OptionLeg, S: float, r: float, sigma: float, T: float):
+        """Price a single option leg premium per unit at entry."""
+        K = leg.calculate_strike(S)
+        if leg.option_type == OptionType.CALL:
+            return self._bs_call(S, K, r, sigma, T)
+        else:
+            return self._bs_put(S, K, r, sigma, T)
+
+    def backtest_strategy(self, strategy: OptionStrategy, expiry_days: int = 7, 
+                                start_date: str = None, end_date: str = None,
+                                trade_frequency: str = 'non_overlapping',
+                                interest_rate: float = 0.05, volatility: float = 0.50):
+        """
+        Full backtesting, analyses all dates for specificied time frame and provides detailed statistics.
+        """
         data = self.price_data.copy()
-        # Filter data by date range provided
+        
+        # Filter data by date range  
         data = data[data.index >= start_date] if start_date else data
         data = data[data.index <= end_date] if end_date else data
-
-        trade_result = []  # Store results for each trade
-        i = 0
         
-        # Loop through data with proper trade frequency logic
-        while i < len(data) - expiry_days:
-            # Get entry date for current trade
+        daily_results = []
+        
+        # Process each day
+        for i in range(len(data)):
             entry_date = data.index[i]
+            entry_price = float(data.iloc[i]['close'])
             
-            # Check if we should enter a trade based on frequency rules - i.e. place trade daily or weekly or monthly
-            trade_cond = False
-            if trade_frequency == 'daily':
-                trade_cond = True
-            elif trade_frequency == 'weekly':
-                trade_cond = entry_date.dayofweek == (entry_day_of_week or 0)  # Default Monday = 0
-            elif trade_frequency == 'monthly':
-                trade_cond = entry_date.day <= 7 and entry_date.dayofweek == (entry_day_of_week or 0)  # First week of month
-            elif trade_frequency == 'non_overlapping':
-                trade_cond = True  # Jump by expiry_days after each trade - no overlap
-            else:
-                raise ValueError("Invalid trade frequency. Choose from 'daily', 'weekly', 'monthly', or 'non_overlapping'. CONSIDER ADDING MORE.")
+            # Handle cases where we can't get next day or expiry data
+            next_day_close = float(data.iloc[i + 1]['close']) if i + 1 < len(data) else entry_price
+            expiry_price = float(data.iloc[i + expiry_days]['close']) if i + expiry_days < len(data) else entry_price
+            expiry_date = data.index[i + expiry_days] if i + expiry_days < len(data) else entry_date
+
+            one_day_pct_move = ((next_day_close - entry_price) / entry_price) * 100
+            expiry_pct_move = ((expiry_price - entry_price) / entry_price) * 100
             
-            if trade_cond:
-                # Get entry details
-                entry_price = float(data.iloc[i]['close'])
-
-                # Get expiry details
-                expiry_date = data.index[i + expiry_days]
-                expiry_price = float(data.iloc[i + expiry_days]['close'])
-
-                # Calculate current PnL for this trade
-                pnl_breakdown = strategy.calculate_total_pnl(entry_price, expiry_price)
-
-                # Calculate metrics
-                price_change = expiry_price - entry_price  # Absolute price change
-                price_change_pct = (price_change / entry_price) * 100  # Percentage price change
+            # Calculate current strikes
+            strike_prices = []
+            for leg in strategy.legs:
+                strike = leg.calculate_strike(entry_price)
+                strike_prices.append(strike)
+            
+            # Calculate Black-Scholes option price for all days
+            option_price = 0.0
+            for leg in strategy.legs:
+                strike = leg.calculate_strike(entry_price)
+                T = expiry_days / 365.0  # Time to expiry in years
                 
-                # Track which option legs expired ITM - generalised logic for option calculations - CHECK THIS LATER
-                legs_expired_itm = []
-                strike_prices = []
-                for leg in strategy.legs:
-                    strike = leg.calculate_strike(entry_price)
-                    strike_prices.append(strike)
-
-                    # Check if option expired ITM based on option type
-                    if leg.option_type == OptionType.CALL:
-                        expired_itm = expiry_price > strike  # Call ITM when current price above strike
-                    else:  # OptionType.PUT
-                        expired_itm = expiry_price < strike  # Put ITM when current price below strike
-                
-                    legs_expired_itm.append({
-                        'option_type': leg.option_type,
-                        'position_type': leg.position_type,
-                        'strike_price': strike,
-                        'expired_itm': expired_itm,
-                    })
-
-                # Determine if primary option leg expired ITM (simple win/loss tracking)
-                primary_leg_expired_itm = legs_expired_itm[0]['expired_itm'] if legs_expired_itm else False
-
-                # Store results for current trade
-                trade_result.append({
-                    'entry_date': entry_date,
-                    'expiry_date': expiry_date,
-                    'entry_price': entry_price,
-                    'expiry_price': expiry_price,
-                    'strike_price': strike_prices,
-                    'legs_expired_itm': legs_expired_itm,
-                    'primary_leg_expired_itm': primary_leg_expired_itm,
-                    'price_change': price_change,
-                    'price_change_pct': price_change_pct,
-                    'underlying_position': strategy.underlying_position,
-                    'underlying_cost': strategy.underlying_position * entry_price if strategy.underlying_position > 0 else 0,
-                    'underlying_held': strategy.underlying_held,
-                    'underlying_avg_cost': strategy.underlying_avg_cost,
-                    'underlying_held_pnl': pnl_breakdown['underlying_held_pnl'],
-                    'underlying_position_pnl': pnl_breakdown['underlying_position_pnl'],
-                    'underlying_pnl': pnl_breakdown['underlying_pnl'],
-                    'options_pnl': pnl_breakdown['options_pnl'],
-                    'trade_pnl': pnl_breakdown['trade_pnl'],
-                    'initial_investment': pnl_breakdown['initial_investment'],
-                })
-                
-                # Move to next trade date
-                if trade_frequency == 'non_overlapping':
-                    i += expiry_days  # Jump to after expiry
+                # Get the premium using the Black-Scholes functions
+                if leg.option_type == OptionType.CALL:
+                    premium = self._bs_call(entry_price, strike, interest_rate, volatility, T)
                 else:
-                    i += 1  # Move to next day
-            else:
-                i += 1  # Move to next day if not trading
+                    premium = self._bs_put(entry_price, strike, interest_rate, volatility, T)
+                
+                # Apply position type (SHORT = negative, LONG = positive)
+                if leg.position_type == PositionType.SHORT:
+                    option_price += -premium * abs(leg.quantity)
+                else:
+                    option_price += premium * abs(leg.quantity)
+                option_price = abs(option_price)
+            
+            # Initialise PnL
+            option_hit = 0
+            option_gains = 0.0
+            old_strike = None
+            
+            # Check against strike from expiry_days ago
+            if i >= expiry_days and len(daily_results) >= expiry_days:
+                # Get the strike that was set expiry_days ago
+                old_strike = daily_results[i - expiry_days+1]['strike_prices'][0]  # Assuming single leg for now
+                
+                # Check if today's close > old strike AND we have tomorrow's data
+                if data.iloc[i]['close'] > old_strike and i + 1 < len(data):
+                    option_hit = 1
+                    # PnL = tomorrow's open - old strike
+                    tomorrow_open = float(data.iloc[i + 1]['open'])
+                    
+                    # For SHORT position (like covered call) - LOSS
+                    # For LONG position - GAIN
+                    for leg in strategy.legs:
+                        if leg.position_type == PositionType.SHORT:
+                            # We lose money when the option is exercised against us
+                            option_gains += -(tomorrow_open - old_strike) * abs(leg.quantity)
+                        else:
+                            # We make money when we exercise our long option
+                            option_gains += (tomorrow_open - old_strike) * abs(leg.quantity)
+                else:
+                    option_hit = 0
+                    option_gains = 0.0
+            
+            # Underlying PnL
+            underlying_pnl = 0.0
+            if strategy.underlying_position != 0:
+                underlying_pnl = strategy.underlying_position * (expiry_price - entry_price)
 
-        return pd.DataFrame(trade_result)
+            # Remove last 6 option prices - CHECK
+            option_gains = np.nan if i >= len(data) - 6 else option_gains
+
+            current_pnl = (option_price - abs(option_gains)) + underlying_pnl
+            
+            # Store results  
+            daily_results.append({
+                'entry_date': entry_date,
+                'expiry_date': expiry_date,
+                'entry_day_of_week': entry_date.strftime('%A'),
+                'entry_price': entry_price,
+                'expiry_price': expiry_price,
+                'one_day_pct_move': round(one_day_pct_move, 2),
+                'expiry_pct_move': round(expiry_pct_move, 2),
+                'strike_prices': strike_prices,
+                'old_strike': old_strike,
+                'option_hit': option_hit,
+                'option_gains': round(option_gains, 2),
+                'option_price': round(option_price, 2),
+                'underlying_pnl': round(underlying_pnl, 2),
+                'current_pnl': round(current_pnl, 2),
+            })
+        
+        daily_data = pd.DataFrame(daily_results)
+        
+        if daily_data.empty:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Day of week performance summary
+        weekday_stats = []
+        weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        
+        for dow_name in weekdays:
+            dow_data = daily_data[daily_data['entry_day_of_week'] == dow_name]
+
+            hits = int(dow_data['option_hit'].sum())
+            losses = abs(dow_data['option_gains'].sum()) 
+            
+            option_price = dow_data['option_price'].sum()
+
+            profit = option_price - losses
+            total_profit = profit + (data.iloc[-1]['close'] - data.iloc[0]['close'])
+
+            percentage_returns = (total_profit / data.iloc[0]['close']) * 100
+            
+            stats = {
+                'day_of_week': dow_name,
+                'hits': hits,
+                'losses': round(losses, 2),
+                'option_price': round(option_price, 2),
+                'profit': round(profit, 2), 
+                'total_profit': round(total_profit, 2),
+                'percentage_returns': round(percentage_returns, 2)
+            }
+            
+            weekday_stats.append(stats)
+
+        # Add average statistics
+        if weekday_stats:
+            avg_stats = {
+                'day_of_week': 'Average',
+                'hits': round(sum(stat['hits'] for stat in weekday_stats) / len(weekday_stats), 2),
+                'losses': round(sum(stat['losses'] for stat in weekday_stats) / len(weekday_stats), 2),
+                'option_price': round(sum(stat['option_price'] for stat in weekday_stats) / len(weekday_stats), 2),
+                'profit': round(sum(stat['profit'] for stat in weekday_stats) / len(weekday_stats), 2),
+                'total_profit': round(sum(stat['total_profit'] for stat in weekday_stats) / len(weekday_stats), 2),
+                'percentage_returns': round(sum(stat['percentage_returns'] for stat in weekday_stats) / len(weekday_stats), 2)
+            }
+            weekday_stats.append(avg_stats)
+        
+        weekday_data = pd.DataFrame(weekday_stats)
+        
+        return daily_data, weekday_data
 
     def _calculate_max_drawdown(self, pnl_series):
         """Calculate maximum drawdown from cumulative PnL."""
@@ -386,340 +450,321 @@ class OptionsBacktester:
         """Calculate annualised Sharpe ratio."""
         if returns.std() == 0:
             return 0
-
         mean_return = returns.mean()
         std_return = returns.std()
-        
         # Annualise based on expiry days - Assuming risk-free rate = 0, ADD RISK-FREE RATE LATER) - CHECK IF WE NEED TO ANNUALISE
         periods_per_year = 252 / expiry_days  # Approximate trading periods per year
         return (mean_return / std_return) * np.sqrt(periods_per_year)
 
-    def summary_stats(self, strategy: OptionStrategy, expiry_days: int = None, start_date: str = None, end_date: str = None, trade_frequency: str = 'non_overlapping', entry_day_of_week: int = None):
-        """Calculate summary statistics for the backtested strategy."""
-        trades = self.backtest_strategy(strategy, expiry_days, start_date, end_date, trade_frequency, entry_day_of_week)
+    def summary_stats(self, strategy: OptionStrategy, expiry_days: int = 7, start_date: str = None, end_date: str = None,
+                    trade_frequency: str = 'non_overlapping', entry_day_of_week: int = None,
+                    interest_rate: float = 0.05, volatility: float = 0.50):
+        """Calculate summary statistics using the backtest_strategy logic with proper day filtering."""
+        daily_data, weekday_data = self.backtest_strategy(strategy, expiry_days, start_date, end_date, 
+                                                    trade_frequency, interest_rate, volatility)
         
-        if trades.empty:
-            return "No trades executed in the given date range."
+        if daily_data.empty:
+            return "No data available for the given date range."
         
-        # Calculate return percentage for each trade
-        trades = trades.copy()
-        trades['return_pct'] = trades.apply(lambda row: (row['trade_pnl'] / abs(row['initial_investment'])) * 100 
-                                                if row['initial_investment'] != 0 else 0, axis=1)
-
-        # Determine winning trades based on strategy type - generalised for option types and strategies CHECK THIS LATER
-        winning_trades = 0
-        if len(strategy.legs) > 0:
-            primarily_leg = strategy.legs[0]  # Assume first leg is primary for win/loss tracking
-
-            # Option sellers - win when option expires OTM
-            if primarily_leg.position_type == PositionType.SHORT:
-                winning_trades = (~trades['primary_leg_expired_itm']).sum()
-            # Option buyers - win when option expires ITM
+        # Filter data based on entry_day_of_week if specified
+        if entry_day_of_week is not None:
+            # Convert day number to day name for filtering (1=Monday, 2=Tuesday, etc.)
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            if 1 <= entry_day_of_week <= 7:
+                target_day = day_names[entry_day_of_week - 1]
+                filter_data = daily_data[daily_data['entry_day_of_week'] == target_day].copy()
+                if filter_data.empty:
+                    return f"No data available for {target_day}s in the given date range."
             else:
-                winning_trades = (trades['trade_pnl'] > 0).sum()
+                return "entry_day_of_week must be between 1 (Monday) and 7 (Sunday)."
         else:
-            # No option legs - treat all trades as winning if P&L is positive
-            winning_trades = (trades['trade_pnl'] > 0).sum()
-
+            filter_data = daily_data.copy()
+        
+        # Filter out rows with NaN option_gains (last 6 days)
+        valid_data = filter_data.dropna(subset=['option_gains']).copy()
+        
+        if valid_data.empty:
+            return "No valid trades available for analysis."
+        
+        # Calculate cumulative PnL properly - as per user's logic
+        valid_data['cumulative_pnl'] = valid_data['current_pnl'].cumsum()
+        
+        # Calculate total PnL for each day (option premium collected + option gains + underlying PnL)
+        valid_data['total_pnl'] = valid_data['option_price'] + valid_data['option_gains'] + valid_data['underlying_pnl']
+        
+        # Calculate return percentage based on initial investment
+        # For covered calls, initial investment includes underlying position
+        valid_data['initial_investment'] = valid_data.apply(
+            lambda row: abs(row['option_price']) + (abs(strategy.underlying_position) * row['entry_price'] if strategy.underlying_position != 0 else 0),
+            axis=1
+        )
+        
+        valid_data['return_pct'] = valid_data.apply(
+            lambda row: (row['total_pnl'] / row['initial_investment']) * 100 if row['initial_investment'] != 0 else 0,
+            axis=1
+        )
+        
+        # Determine winning trades - options not exercised for short positions
+        if len(strategy.legs) > 0 and strategy.legs[0].position_type == PositionType.SHORT:
+            winning_trades = (valid_data['option_hit'] == 0).sum()  # Win when option not exercised
+        else:
+            winning_trades = (valid_data['total_pnl'] > 0).sum()  # Win when total PnL positive
+        
         # Calculate summary statistics
+        target_day_name = day_names[entry_day_of_week - 1] if entry_day_of_week else "All Days"
+        
         stats = {
-            'total_trades': len(trades),
-            'winning_trades': winning_trades,
-            'losing_trades': len(trades) - winning_trades,
-            'win_rate': (winning_trades / len(trades)) * 100,  # As percentage
-            'avg_pnl': trades['trade_pnl'].mean(),
-            'total_pnl': trades['trade_pnl'].sum(),
-            'avg_return': trades['return_pct'].mean(),  # Average return percentage
-            'total_return': trades['return_pct'].sum(),  # Total return percentage
-            'best_trade': trades['trade_pnl'].max(),
-            'worst_trade': trades['trade_pnl'].min(),
-            'best_trade_return': trades['return_pct'].max(),
-            'worst_trade_return': trades['return_pct'].min(),
-            'std_pnl': trades['trade_pnl'].std(),
-            'std_return': trades['return_pct'].std(),
-            'max_drawdown': self._calculate_max_drawdown(trades['trade_pnl']),
-            'profit_factor': self._calculate_profit_factor(trades['trade_pnl']),
-            'sharpe_ratio': self._calculate_sharpe_ratio(trades['return_pct'], expiry_days),
-            'options_expired_itm': trades['primary_leg_expired_itm'].sum() if 'primary_leg_expired_itm' in trades else 0  # Track ITM expiries
+            'entry_date': f"{target_day_name} only" if entry_day_of_week else "All Days",
+            'winning_days': winning_trades,
+            'losing_days': len(valid_data) - winning_trades,
+            'win_rate': (winning_trades / len(valid_data)) * 100,
+            'total_profit': weekday_data[weekday_data['day_of_week'] == target_day_name]['total_profit'].values[0],
+            'percentage_returns': weekday_data[weekday_data['day_of_week'] == target_day_name]['percentage_returns'].values[0],
+            'best_day': valid_data['current_pnl'].max(),
+            'worst_day': valid_data['current_pnl'].min(),
+            'std_pnl': valid_data['current_pnl'].std(),
+            'std_dev_returns': valid_data['return_pct'].std(),
+            'max_drawdown': self._calculate_max_drawdown(valid_data['current_pnl']),
+            'profit_factor': self._calculate_profit_factor(valid_data['current_pnl']),
+            'sharpe_ratio': self._calculate_sharpe_ratio(valid_data['return_pct'], 1),  # Daily returns
         }
-
+        
         # Round floats to 2 decimal places
-        rounded_stats = {k: round(v, 2) if isinstance(v, (float, int)) else v for k, v in stats.items()}
-
+        rounded_stats = {k: round(v, 2) if isinstance(v, (float, int)) and not np.isnan(v) else v for k, v in stats.items()}
+        
         stats_table = tabulate(rounded_stats.items(), headers=["Metric", "Value"], tablefmt="pretty")
         return stats_table
 
-    def plot_backtest_results(self, strategy: OptionStrategy, expiry_days: int = None, start_date: str = None, end_date: str = None, trade_frequency: str = 'non_overlapping', entry_day_of_week: int = None):
-        """Create visualisation of backtest results."""
-        # Run backtest to get results
-        results = self.backtest_strategy(strategy, expiry_days, start_date, end_date, trade_frequency, entry_day_of_week)
+    def plot_backtest_results(self, strategy: OptionStrategy, expiry_days: int = 7, start_date: str = None, end_date: str = None,
+                            trade_frequency: str = 'non_overlapping', entry_day_of_week: int = None,
+                            interest_rate: float = 0.05, volatility: float = 0.50):
+        """Create visualisation of backtest results using backtest_strategy logic with proper day filtering."""
+        daily_data, weekday_data = self.backtest_strategy(strategy, expiry_days, start_date, end_date, 
+                                                    trade_frequency, interest_rate, volatility)
+        
+        # Filter data based on entry_day_of_week if specified
+        if entry_day_of_week is not None:
+            # Convert day number to day name for filtering (1=Monday, 2=Tuesday, etc.)
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            if 1 <= entry_day_of_week <= 7:
+                target_day = day_names[entry_day_of_week - 1]
+                filter_data = daily_data[daily_data['entry_day_of_week'] == target_day].copy()
+                if filter_data.empty:
+                    print(f"No data available for {target_day}s in the given date range.")
+                    return None
+            else:
+                print("entry_day_of_week must be between 1 (Monday) and 7 (Sunday).")
+                return None
+        else:
+            filter_data = daily_data.copy()
+        
+        # Filter out rows with NaN option_gains
+        results = filter_data.dropna(subset=['option_gains']).copy()
         
         if results.empty:
-            print("No trades to plot")
+            print("No valid data to plot")
             return None
         
-        # Calculate return percentage and log returns for plotting
-        results = results.copy()
-        results['return_pct'] = results.apply(
-            lambda row: (row['trade_pnl'] / abs(row['initial_investment'])) * 100 
-            if row['initial_investment'] != 0 else 0, axis=1
+        # Calculate cumulative PnL
+        results['cumulative_pnl'] = results['current_pnl'].cumsum()
+
+        # Calculate total PnL and return metrics
+        results['total_pnl'] = results['option_price'] + results['option_gains'] + results['underlying_pnl']
+        results['initial_investment'] = results.apply(
+            lambda row: abs(row['option_price']) + (abs(strategy.underlying_position) * row['entry_price'] if strategy.underlying_position != 0 else 0),
+            axis=1
         )
-        
-        # Calculate log returns - better for time series analysis
+        results['return_pct'] = results.apply(
+            lambda row: (row['total_pnl'] / row['initial_investment']) * 100 if row['initial_investment'] != 0 else 0,
+            axis=1
+        )
         results['log_return'] = results.apply(
-            lambda row: np.log(1 + (row['trade_pnl'] / abs(row['initial_investment']))) * 100
-            if row['initial_investment'] != 0 and (1 + row['trade_pnl'] / abs(row['initial_investment'])) > 0 
+            lambda row: np.log(1 + (row['total_pnl'] / row['initial_investment'])) * 100
+            if row['initial_investment'] != 0 and (1 + row['total_pnl'] / row['initial_investment']) > 0
             else np.nan, axis=1
         )
         
-        # Create subplots with 4x2 grid
+        target_day_name = day_names[entry_day_of_week - 1] if entry_day_of_week else "All Days"
+        
+        # Determine underlying asset name from price data columns or use generic term
+        underlying_name = "BTC"  # Default to BTC, but this could be made configurable
+        if hasattr(self.price_data, 'columns') and len(self.price_data.columns) > 0:
+            # Try to infer from column names or use a more generic approach
+            underlying_name = "Underlying Asset"
+        
+        # Create subplots with new layout
         fig = make_subplots(
-            rows=4, cols=2,
+            rows=3, cols=2,
             subplot_titles=(
-                'Cumulative P&L Over Time', 'P&L & Log Return Distribution',
-                'Win Rate by Month', 'Average Log Return by Day of Week',
-                'Price Movement vs P&L', 'Rolling 30-Day Log Performance',
-                'Entry vs Expiry Prices', 'P&L Heatmap by Month'
+                f'{underlying_name} Price', 'Cumulative PnL',
+                'Daily PnL Distribution', 'Rolling Performance Metrics',
+                'Entry Price vs Exercise Events', 'Monthly PnL'
             ),
             specs=[
-                [{"secondary_y": False}, {"type": "histogram"}],
-                [{"type": "bar"}, {"type": "bar"}],
-                [{"type": "scatter"}, {"secondary_y": True}],
-                [{"type": "scatter"}, {"type": "heatmap"}]
+                [{"secondary_y": False}, {"secondary_y": False}],
+                [{"type": "histogram"}, {"secondary_y": True}],
+                [{"type": "scatter"}, {"type": "bar"}]
             ],
             vertical_spacing=0.08,
             horizontal_spacing=0.1
         )
         
-        # 1. Enhanced Cumulative P&L over time with benchmark
-        cumulative_pnl = results['trade_pnl'].cumsum()
-
-        # Calculate strategy-matched benchmark (buy underlying at same frequency)
-        # Use the same investment amount for fair comparison
-        results['underlying_return'] = ((results['expiry_price'] - results['entry_price']) / results['entry_price']) * results['underlying_cost']
-        cumulative_benchmark = results['underlying_return'].cumsum()
+        # 1. Underlying Price (Top Left) - use original price data
+        price_data_filtered = self.price_data.copy()
+        if start_date:
+            price_data_filtered = price_data_filtered[price_data_filtered.index >= start_date]
+        if end_date:
+            price_data_filtered = price_data_filtered[price_data_filtered.index <= end_date]
         
-        # Calculate cumulative log returns for additional insight
-        results_sorted = results.sort_values('entry_date')
-        cumulative_log_returns = results_sorted['log_return'].fillna(0).cumsum()
-
-        # Plot strategy performance
         fig.add_trace(
-            go.Scatter(x=results['entry_date'], y=cumulative_pnl, 
-                    mode='lines', name='Strategy P&L',
-                    line=dict(color='green', width=2)),
-            row=1, col=1
-        )
-
-        # Plot benchmark performance - buy & hold at same frequency
-        fig.add_trace(
-            go.Scatter(x=results['entry_date'], y=cumulative_benchmark, 
-                    mode='lines', name='Buy & Hold (Same Frequency)',
-                    line=dict(color='blue', width=2, dash='dot')),
-            row=1, col=1
-        )
-
-        # Add a zero line for reference
-        fig.add_hline(y=0, line_color="gray", 
-                    opacity=0.5, row=1, col=1)
-
-        # Add outperformance shading
-        outperformance = cumulative_pnl - cumulative_benchmark
-        fig.add_trace(
-            go.Scatter(x=results['entry_date'], y=outperformance,
-                    mode='lines', name='Outperformance',
-                    line=dict(color='purple', width=1),
-                    fill='tonexty', fillcolor='rgba(128,0,128,0.1)'),
+            go.Scatter(x=price_data_filtered.index, y=price_data_filtered['close'],
+                    mode='lines', name=f'{underlying_name} Price',
+                    line=dict(color='blue', width=2)),
             row=1, col=1
         )
         
-        # 2. P&L distribution histogram
-        # Add log return distribution
+        # 2. Cumulative PnL (Top Right) with Buy & Hold comparison
         fig.add_trace(
-            go.Histogram(x=results['log_return'].dropna(), nbinsx=30, 
-                        name='Log Return Distribution (%)',
-                        marker_color='lightcoral',
-                        opacity=0.7),
+            go.Scatter(x=results['entry_date'], y=results['cumulative_pnl'],
+                    mode='lines', name='Options Strategy',
+                    line=dict(color='green', width=3)),
             row=1, col=2
         )
         
-        # 3. Win rate by month based on strategy type - generalised logic
-        results['month'] = results['entry_date'].dt.to_period('M')
-        if len(strategy.legs) > 0 and strategy.legs[0].position_type == PositionType.SHORT:
-            # For option sellers - win = option expired OTM
-            monthly_stats = results.groupby('month').agg({
-                'primary_leg_expired_itm': lambda x: (~x).mean() * 100  # Win rate = expired OTM
-            }).reset_index()
-            monthly_stats.rename(columns={'primary_leg_expired_itm': 'win_rate'}, inplace=True)
-        else:
-            # For option buyers and other strategies - win = positive P&L
-            monthly_stats = results.groupby('month').agg({
-                'trade_pnl': lambda x: (x > 0).mean() * 100  # Win rate = positive P&L
-            }).reset_index()
-            monthly_stats.rename(columns={'trade_pnl': 'win_rate'}, inplace=True)
+        # Calculate buy and hold returns
+        if not results.empty:
+            initial_price = results['entry_price'].iloc[0]
+            buy_hold_cumulative = []
+            for _, row in results.iterrows():
+                # Buy and hold assuming 1 share return = (current_price - initial_price) * number of shares
+                buy_hold_return = (row['entry_price'] - initial_price)
+                buy_hold_cumulative.append(buy_hold_return)
+            
+            fig.add_trace(
+                go.Scatter(x=results['entry_date'], y=buy_hold_cumulative,
+                        mode='lines', name='Buy & Hold',
+                        line=dict(color='blue', width=2)),
+                row=1, col=2
+            )
         
-        monthly_stats['month_str'] = monthly_stats['month'].astype(str)
+        # Add zero line for reference
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=2)
         
+        # 3. Daily PnL Distribution (Middle Left) with proper color coding
+        # Use plotly's built-in histogram with custom colors based on bin positions
+        pnl_values = results['current_pnl'].values
+        
+        # Create histogram data manually to control colors properly
+        counts, bin_edges = np.histogram(pnl_values, bins=30)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        # Create separate traces for positive and negative bins
+        for i, (count, left_edge, right_edge, center) in enumerate(zip(counts, bin_edges[:-1], bin_edges[1:], bin_centers)):
+            if count > 0:  # Only plot if there's data in this bin
+                color = 'green' if center >= 0 else 'red'
+                
+                fig.add_trace(
+                    go.Bar(x=[center], y=[count],
+                        width=[right_edge - left_edge],
+                        marker_color=color,
+                        opacity=0.7,
+                        showlegend=False),
+                    row=2, col=1
+                )
+        
+        # 4. Rolling Performance Metrics (Middle Right)
+        results_indexed = results.set_index('entry_date').sort_index()
+        rolling_pnl = results_indexed['current_pnl'].rolling('30D').mean()
+        rolling_vol = results_indexed['return_pct'].rolling('30D').std()
+        
+        rolling_pnl = rolling_pnl.dropna()
+        rolling_vol = rolling_vol.dropna()
+        
+        if not rolling_pnl.empty:
+            fig.add_trace(
+                go.Scatter(x=rolling_pnl.index, y=rolling_pnl.values,
+                        mode='lines', name='30D Avg PnL',
+                        line=dict(color='blue')),
+                row=2, col=2
+            )
+        
+        if not rolling_vol.empty:
+            fig.add_trace(
+                go.Scatter(x=rolling_vol.index, y=rolling_vol.values,
+                        mode='lines', name='30D Volatility',
+                        line=dict(color='red')),
+                row=2, col=2, secondary_y=True
+            )
+        
+        # 5. Entry Price vs Exercise Events (Bottom Left)
+        colors = ['red' if hit else 'green' for hit in results['option_hit']]
         fig.add_trace(
-            go.Bar(x=monthly_stats['month_str'], y=monthly_stats['win_rate'],
-                name='Win Rate %', marker_color='purple'),
-            row=2, col=1
-        )
-        
-        # 4. Average log return by day of week
-        results['dow'] = results['entry_date'].dt.day_name()
-        dow_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        dow_log_stats = results.groupby('dow')['log_return'].mean().reindex(dow_order)
-        
-        fig.add_trace(
-            go.Bar(x=dow_log_stats.index, y=dow_log_stats.values,
-                name='Avg Log Return %', marker_color='orange'),
-            row=2, col=2
-        )
-        
-        # 5. Price movement vs P&L scatter plot
-        fig.add_trace(
-            go.Scatter(x=results['price_change_pct'], y=results['trade_pnl'],
-                    mode='markers', name='P&L vs Price Move',
-                    marker=dict(color=results['trade_pnl'], colorscale='RdYlGn', 
-                                showscale=False, size=5)),  # CHANGE SHOWSCALE FOR COLOURBAR
+            go.Scatter(x=results['entry_price'], y=results['expiry_price'],
+                    mode='markers', name='Exercise Events',
+                    marker=dict(color=colors, size=5),
+                    text=[f"Exercised: {'Yes' if hit else 'No'}" for hit in results['option_hit']],
+                    hovertemplate="Entry: $%{x}<br>Expiry: $%{y}<br>%{text}<extra></extra>"),
             row=3, col=1
         )
         
-        # 6. Rolling 30-day performance metrics
-        # Ensure entry_date is datetime and set as index for rolling calculations
-        results_copy = results.set_index('entry_date').sort_index()
-
-        # Use log returns for rolling metrics
-        rolling_log_return = results_copy['log_return'].rolling('30D').mean()
-        rolling_vol = results_copy['return_pct'].rolling('30D').std()
-
-        # Drop NaN values for cleaner plotting
-        rolling_log_return = rolling_log_return.dropna()
-        rolling_vol = rolling_vol.dropna()
-
-        fig.add_trace(
-            go.Scatter(x=rolling_log_return.index, y=rolling_log_return.values,
-                    mode='lines', name='30D Avg Log Return (%)',
-                    line=dict(color='blue')),
-            row=3, col=2
-        )
-
-        fig.add_trace(
-            go.Scatter(x=rolling_vol.index, y=rolling_vol.values,
-                    mode='lines', name='30D Volatility (%)',
-                    line=dict(color='red')),
-            row=3, col=2, secondary_y=True
-        )
-        
-        # 7. Entry vs expiry prices scatter with colour coding based on ITM status
-        if 'primary_leg_expired_itm' in results and len(strategy.legs) > 0:
-            if strategy.legs[0].position_type == PositionType.SHORT:
-                # For sellers - red if ITM (bad), green if OTM (good)
-                colors = ['red' if itm else 'green' for itm in results['primary_leg_expired_itm']]
-            else:
-                # For buyers - green if profitable, red if not
-                colors = ['green' if pnl > 0 else 'red' for pnl in results['trade_pnl']]
-        else:
-            # Default to P&L based colouring
-            colors = ['green' if pnl > 0 else 'red' for pnl in results['trade_pnl']]
-        
-        fig.add_trace(
-            go.Scatter(x=results['entry_price'], y=results['expiry_price'],
-                    mode='markers', name='Entry vs Expiry',
-                    marker=dict(color=colors, size=5)),
-            row=4, col=1
-        )
-        
-        # Add diagonal reference line
+        # Add diagonal line for reference
         min_price = min(results['entry_price'].min(), results['expiry_price'].min())
         max_price = max(results['entry_price'].max(), results['expiry_price'].max())
         fig.add_trace(
             go.Scatter(x=[min_price, max_price], y=[min_price, max_price],
                     mode='lines', line=dict(dash='dash', color='gray'),
                     showlegend=False),
-            row=4, col=1
+            row=3, col=1
         )
         
-        # Add strike lines if available
-        if 'strike_prices' in results and len(strategy.legs) > 0:
-            for i, leg in enumerate(strategy.legs):
-                if i == 0:  # Only plot primary leg strike
-                    strike_prices = [strikes[i] if i < len(strikes) else None 
-                                for strikes in results['strike_prices']]
-                    fig.add_trace(
-                        go.Scatter(x=results['entry_price'], y=strike_prices,
-                                mode='markers', name=f'{leg.option_type} Strike',
-                                marker=dict(color='blue', size=3, symbol='x')),
-                        row=4, col=1
-                    )
-        
-        # 8. Improved P&L heatmap by month and year
+        # 6. Monthly PnL Bar Chart (Bottom Right)
         results['year'] = results['entry_date'].dt.year
         results['month_num'] = results['entry_date'].dt.month
-
-        # Create pivot table and handle NaN values
-        heatmap_data = results.pivot_table(
-            values='trade_pnl', 
-            index='month_num', 
-            columns='year', 
-            aggfunc='sum'
-        ).fillna(0)  # Replace NaN with 0
-
-        # Create month labels
-        month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-        # Ensure we have all 12 months in the index
-        full_month_index = list(range(1, 13))
-        heatmap_data = heatmap_data.reindex(full_month_index, fill_value=0)
-
-        # Create text annotations - show empty string for zero values (so it doesn't show NaN)
-        text_annotations = np.where(heatmap_data.values == 0, '', 
-                                np.round(heatmap_data.values, 0).astype(int).astype(str))
-
+        results['year_month'] = results['entry_date'].dt.to_period('M')
+        
+        monthly_pnl = results.groupby('year_month')['current_pnl'].sum().reset_index()
+        monthly_pnl['year_month_str'] = monthly_pnl['year_month'].astype(str)
+        
+        # Color bars based on positive/negative values
+        bar_colors = ['green' if pnl >= 0 else 'red' for pnl in monthly_pnl['current_pnl']]
+        
         fig.add_trace(
-            go.Heatmap(
-                z=heatmap_data.values,
-                x=[str(int(col)) for col in heatmap_data.columns],  # Convert to integer strings
-                y=month_labels,
-                colorscale='RdYlGn',
-                text=text_annotations,
-                texttemplate='%{text}',
-                textfont={"size": 10},
-                showscale=False,  # This removes the colorbar
-                hoverongaps=False  # Don't show hover for empty cells
-            ),
-            row=4, col=2
+            go.Bar(x=monthly_pnl['year_month_str'], y=monthly_pnl['current_pnl'],
+                name='Monthly PnL',
+                marker_color=bar_colors,
+                text=[f"${pnl:.0f}" for pnl in monthly_pnl['current_pnl']],
+                textposition='outside'),
+            row=3, col=2
         )
         
-        # Update layout with title and formatting
+        # Add zero line for monthly PnL
+        fig.add_hline(y=0, line_dash="dash", line_color="black", row=3, col=2)
+        
         fig.update_layout(
-            title=f'{strategy.name} - Backtest Analysis',
+            title=f'{strategy.name} - Backtest Analysis ({target_day_name})',
             showlegend=False,
-            height=1600,
-            width=1200,
+            height=1200,
+            width=1400,
         )
         
-        # Hide colour bar for heatmap
-        fig.update_coloraxes(showscale=False)
-        
-        # Update axes labels for each subplot
+        # Update axes labels
         fig.update_xaxes(title_text="Date", row=1, col=1)
-        fig.update_yaxes(title_text="Cumulative P&L ($)", row=1, col=1)
-        fig.update_xaxes(title_text="P&L ($) / Log Return (%)", row=1, col=2)
-        fig.update_yaxes(title_text="Frequency", row=1, col=2)
-        fig.update_xaxes(title_text="Month", row=2, col=1)
-        fig.update_yaxes(title_text="Win Rate (%)", row=2, col=1)
-        fig.update_xaxes(title_text="Day of Week", row=2, col=2)
-        fig.update_yaxes(title_text="Avg Log Return (%)", row=2, col=2)
-        fig.update_xaxes(title_text="Price Change (%)", row=3, col=1)
-        fig.update_yaxes(title_text="P&L ($)", row=3, col=1)
-        fig.update_xaxes(title_text="Date", row=3, col=2)
-        fig.update_yaxes(title_text="Log Return (%)", row=3, col=2)
-        fig.update_yaxes(title_text="Volatility (%)", row=3, col=2, secondary_y=True)
-        fig.update_xaxes(title_text="Entry Price ($)", row=4, col=1)
-        fig.update_yaxes(title_text="Expiry Price ($)", row=4, col=1)
-        fig.update_xaxes(title_text="Year", row=4, col=2)
-        fig.update_yaxes(title_text="Month", row=4, col=2)
+        fig.update_yaxes(title_text=f"{underlying_name} Price ($)", row=1, col=1)
+        
+        fig.update_xaxes(title_text="Date", row=1, col=2)
+        fig.update_yaxes(title_text="Cumulative PnL ($)", row=1, col=2)
+        
+        fig.update_xaxes(title_text="Daily PnL ($)", row=2, col=1)
+        fig.update_yaxes(title_text="Frequency", row=2, col=1)
+        
+        fig.update_xaxes(title_text="Date", row=2, col=2)
+        fig.update_yaxes(title_text="PnL ($)", row=2, col=2)
+        fig.update_yaxes(title_text="Volatility (%)", row=2, col=2, secondary_y=True)
+        
+        fig.update_xaxes(title_text="Entry Price ($)", row=3, col=1)
+        fig.update_yaxes(title_text="Expiry Price ($)", row=3, col=1)
+        
+        fig.update_xaxes(title_text="Month", row=3, col=2)
+        fig.update_yaxes(title_text="Monthly PnL ($)", row=3, col=2)
         
         return fig
