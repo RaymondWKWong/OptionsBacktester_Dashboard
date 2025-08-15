@@ -2,6 +2,8 @@
 
 Simple options strategy backtester over historical data with performance metrics and visualisations
 
+Access via Streamlit: https://optionsbacktester-dashboard.streamlit.app
+
 ## Supported Strategies
 
 Can add additional option legs within backtest.py to create new option strategies
