@@ -5,6 +5,7 @@ from plotly.subplots import make_subplots
 from dataclasses import dataclass
 from tabulate import tabulate
 from scipy import stats
+from math import erf
 
 # Define options type to consistently check logic
 class OptionType:
@@ -96,7 +97,6 @@ class OptionStrategy:
             'strike_prices': strike_prices
         }
 
-# Create option strategy templates to easily create common strategies
 class OptionStrategyTemplate:
     """Collection of common option strategies with default parameters."""
     

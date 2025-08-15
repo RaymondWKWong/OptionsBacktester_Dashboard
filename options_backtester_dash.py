@@ -180,6 +180,50 @@ def format_stats_table(stats_str):
         df = pd.DataFrame(list(stats_dict.items()), columns=['Metric', 'Value'])
         return df
 
+def safe_summary_stats(backtester, **kwargs):
+    """Wrapper for summary_stats with error handling."""
+    try:
+        return backtester.summary_stats(**kwargs)
+    except IndexError as e:
+        if "index 0 is out of bounds" in str(e):
+            # Return a basic summary when detailed analysis fails
+            try:
+                # Create a copy of kwargs without entry_day_of_week for backtest_strategy
+                backtest_kwargs = kwargs.copy()
+                if 'entry_day_of_week' in backtest_kwargs:
+                    del backtest_kwargs['entry_day_of_week']
+                
+                # Run basic backtest to get trade count
+                daily_data, weekday_data = backtester.backtest_strategy(**backtest_kwargs)
+                
+                if daily_data.empty:
+                    return "No trades were generated for the selected parameters. Try adjusting the date range or strategy parameters."
+                else:
+                    # Basic stats without day-of-week analysis
+                    total_trades = len(daily_data)
+                    
+                    # Check if we have the required columns
+                    if 'current_pnl' in daily_data.columns:
+                        total_pnl = daily_data['current_pnl'].sum()
+                        win_rate = (daily_data['current_pnl'] > 0).mean() * 100
+                    else:
+                        total_pnl = 0
+                        win_rate = 0
+                    
+                    return f"""Basic Results:
+Total Trades: {total_trades}
+Total P&L: ${total_pnl:.2f}
+Win Rate: {win_rate:.1f}%
+
+Note: Detailed analysis failed due to insufficient data for some metrics.
+Try a longer date range or different parameters for full analysis."""
+            except Exception as e2:
+                return f"Error running backtest: {str(e2)}"
+        else:
+            return f"Error in analysis: {str(e)}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
 def main():
     st.title("📈 Options Strategy Backtester")
     st.markdown("Backtest various options strategies on real cryptocurrency data with customizable parameters.")
@@ -219,14 +263,12 @@ def main():
     # Common parameters with number inputs instead of sliders
     if selected_strategy == "Covered Call":
         strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=100, max_value=120, value=105, step=1) / 100
-        premium_pct = st.sidebar.number_input("Premium (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1) / 100
         underlying_position = st.sidebar.number_input("Underlying Position", min_value=0, max_value=1000, value=1, step=1)
-        underlying_held = st.sidebar.number_input("Already Held", min_value=0, max_value=1000, value=0, step=1)
-        underlying_avg_cost = st.sidebar.number_input("Average Cost ($)", min_value=0.0, max_value=200000.0, value=118000.0, step=100.0)
+        underlying_held = st.sidebar.number_input("Already Held", min_value=0, max_value=1000, value=1, step=1)
+        underlying_avg_cost = st.sidebar.number_input("Average Cost ($)", min_value=0.0, max_value=200000.0, value=45000.0, step=100.0) if underlying_held > 0 else None
         
         strategy = OptionStrategyTemplate.covered_call(
             strike_pct=strike_pct,
-            premium_pct=premium_pct,
             underlying_position=underlying_position,
             underlying_held=underlying_held,
             underlying_avg_cost=underlying_avg_cost
@@ -234,22 +276,16 @@ def main():
         
     elif selected_strategy == "Cash Secured Put":
         strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=80, max_value=100, value=95, step=1) / 100
-        premium_pct = st.sidebar.number_input("Premium (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.cash_secured_put(
-            strike_pct=strike_pct,
-            premium_pct=premium_pct
+            strike_pct=strike_pct
         )
         
     elif selected_strategy == "Long Straddle":
         strike_pct = st.sidebar.number_input("Strike Price (%)", min_value=95, max_value=105, value=100, step=1) / 100
-        call_premium = st.sidebar.number_input("Call Premium (%)", min_value=1.0, max_value=6.0, value=3.0, step=0.1) / 100
-        put_premium = st.sidebar.number_input("Put Premium (%)", min_value=1.0, max_value=6.0, value=3.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.long_straddle(
-            strike_pct=strike_pct,
-            call_premium=call_premium,
-            put_premium=put_premium
+            strike_pct=strike_pct
         )
         
     elif selected_strategy == "Iron Condor":
@@ -257,47 +293,37 @@ def main():
         put_long = st.sidebar.number_input("Put Long Strike (%)", min_value=80, max_value=95, value=90, step=1) / 100
         call_short = st.sidebar.number_input("Call Short Strike (%)", min_value=100, max_value=115, value=105, step=1) / 100
         call_long = st.sidebar.number_input("Call Long Strike (%)", min_value=105, max_value=120, value=110, step=1) / 100
-        short_premium = st.sidebar.number_input("Short Premium (%)", min_value=0.5, max_value=4.0, value=2.0, step=0.1) / 100
-        long_premium = st.sidebar.number_input("Long Premium (%)", min_value=0.2, max_value=2.0, value=1.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.iron_condor(
             put_short=put_short,
             put_long=put_long,
             call_short=call_short,
-            call_long=call_long,
-            short_premium=short_premium,
-            long_premium=long_premium
+            call_long=call_long
         )
         
     elif selected_strategy == "Bull Call Spread":
         long_strike = st.sidebar.number_input("Long Strike (%)", min_value=95, max_value=105, value=100, step=1) / 100
         short_strike = st.sidebar.number_input("Short Strike (%)", min_value=100, max_value=115, value=105, step=1) / 100
-        long_premium = st.sidebar.number_input("Long Premium (%)", min_value=1.0, max_value=5.0, value=3.0, step=0.1) / 100
-        short_premium = st.sidebar.number_input("Short Premium (%)", min_value=0.2, max_value=3.0, value=1.0, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.bull_call_spread(
             long_strike=long_strike,
-            short_strike=short_strike,
-            long_premium=long_premium,
-            short_premium=short_premium
+            short_strike=short_strike
         )
         
     elif selected_strategy == "Long Strangle":
         call_strike = st.sidebar.number_input("Call Strike (%)", min_value=100, max_value=115, value=105, step=1) / 100
         put_strike = st.sidebar.number_input("Put Strike (%)", min_value=85, max_value=100, value=95, step=1) / 100
-        call_premium = st.sidebar.number_input("Call Premium (%)", min_value=0.5, max_value=3.0, value=1.5, step=0.1) / 100
-        put_premium = st.sidebar.number_input("Put Premium (%)", min_value=0.5, max_value=3.0, value=1.5, step=0.1) / 100
         
         strategy = OptionStrategyTemplate.long_strangle(
             call_strike=call_strike,
-            put_strike=put_strike,
-            call_premium=call_premium,
-            put_premium=put_premium
+            put_strike=put_strike
         )
     
     # Backtesting parameters
     st.sidebar.subheader("Backtesting Parameters")
     expiry_days = st.sidebar.number_input("Expiry Days", min_value=1, max_value=30, value=7, step=1)
+    interest_rate = st.sidebar.number_input("Interest Rate", min_value=0.0, max_value=0.10, value=0.05, step=0.01)
+    volatility = st.sidebar.number_input("Volatility", min_value=0.1, max_value=1.0, value=0.50, step=0.05)
     
     # Date range
     price_data = datasets[selected_crypto]
@@ -306,9 +332,9 @@ def main():
     available_start = price_data.index.min().date()
     available_end = price_data.index.max().date()
     
-    default_start = max(available_start, datetime(2024, 7, 31).date())
-    default_end = min(available_end, datetime(2025, 7, 31).date())
-    
+    default_start = max(available_start, datetime(2024, 7, 16).date())
+    default_end = min(available_end, datetime(2025, 7, 15).date())
+
     # Ensure all are datetime.date
     if isinstance(available_start, pd.Timestamp):
         available_start = available_start.date()
@@ -327,14 +353,17 @@ def main():
         ["non_overlapping", "daily", "weekly", "monthly"]
     )
     
-    if trade_frequency in ["weekly", "monthly"]:
-        entry_day = st.sidebar.selectbox(
-            "Entry Day of Week",
-            ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        )
-        entry_day_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(entry_day)
+    # Entry day of week selection (always available, not just for weekly/monthly)
+    entry_day_option = st.sidebar.selectbox(
+        "Entry Day of Week Filter",
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        help="Filter results to only show trades entered on specific days of the week. This affects the analysis and statistics."
+    )
+    
+    if entry_day_option == "All Days":
+        entry_day_of_week = None
     else:
-        entry_day_of_week = 0
+        entry_day_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(entry_day_option) + 1
     
     # Load data and run backtest
     if st.sidebar.button("Run Backtest", type="primary"):
@@ -343,30 +372,52 @@ def main():
             backtester = OptionsBacktester(price_data)
             
             # Show data info
-            st.info(f"Using {selected_crypto} data: {len(price_data)} days from {price_data.index[0].date()} to {price_data.index[-1].date()}")
+            data_info = f"Using {selected_crypto} data: {len(price_data)} days from {price_data.index[0].date()} to {price_data.index[-1].date()}"
+            if entry_day_of_week:
+                day_name = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][entry_day_of_week - 1]
+                data_info += f" (filtered for {day_name}s only)"
+            st.info(data_info)
             
-            # Run backtest
-            stats_str = backtester.summary_stats(
-                strategy=strategy,
-                expiry_days=expiry_days,
-                start_date=str(start_date),
-                end_date=str(end_date),
-                trade_frequency=trade_frequency,
-                entry_day_of_week=entry_day_of_week
-            )
+            # Parameters for backtesting
+            backtest_params = {
+                'strategy': strategy,
+                'expiry_days': expiry_days,
+                'start_date': str(start_date),
+                'end_date': str(end_date),
+                'trade_frequency': trade_frequency,
+                'entry_day_of_week': entry_day_of_week,
+                'interest_rate': interest_rate,
+                'volatility': volatility
+            }
             
-            fig = backtester.plot_backtest_results(
-                strategy=strategy,
-                expiry_days=expiry_days,
-                start_date=str(start_date),
-                end_date=str(end_date),
-                trade_frequency=trade_frequency,
-                entry_day_of_week=entry_day_of_week
-            )
+            # Run backtest with safe wrapper
+            stats_str = safe_summary_stats(backtester, **backtest_params)
+            
+            # Get detailed backtest data for tables
+            try:
+                backtest_kwargs = backtest_params.copy()
+                if 'entry_day_of_week' in backtest_kwargs:
+                    del backtest_kwargs['entry_day_of_week']  # Remove for backtest_strategy call
+                daily_df, weekday_df = backtester.backtest_strategy(**backtest_kwargs)
+            except Exception as e:
+                st.warning(f"Could not get detailed backtest data: {str(e)}")
+                daily_df, weekday_df = None, None
+            
+            # Try to get the plot
+            try:
+                fig = backtester.plot_backtest_results(**backtest_params)
+            except Exception as e:
+                st.warning(f"Could not generate plot: {str(e)}")
+                fig = None
             
             # Store results in session state
             st.session_state.stats_str = stats_str
-            st.session_state.fig = fig
+            if fig is not None:
+                st.session_state.fig = fig
+            if daily_df is not None:
+                st.session_state.daily_df = daily_df
+            if weekday_df is not None:
+                st.session_state.weekday_df = weekday_df
             st.session_state.strategy_name = selected_strategy
             st.session_state.crypto_name = selected_crypto
     
@@ -422,8 +473,98 @@ def main():
         
         # Display the backtest chart
         st.subheader("Detailed Analysis")
-        if hasattr(st.session_state, 'fig'):
+        if hasattr(st.session_state, 'fig') and st.session_state.fig is not None:
             st.plotly_chart(st.session_state.fig, use_container_width=True)
+        else:
+            st.warning("No chart data available. This may occur when there's insufficient data for the selected parameters.")
+        
+        
+
+        # Create two columns for the tables
+        table_col1, table_col2 = st.columns(2)
+        
+        with table_col1:
+            st.markdown("**Daily Trade Details**")
+            
+            if hasattr(st.session_state, 'daily_df') and st.session_state.daily_df is not None:
+                # Format the daily_df for better display
+                daily_display = st.session_state.daily_df.copy()
+                
+                # Format columns for better readability
+                if 'entry_date' in daily_display.columns:
+                    daily_display['entry_date'] = pd.to_datetime(daily_display['entry_date']).dt.strftime('%Y-%m-%d')
+                if 'expiry_date' in daily_display.columns:
+                    daily_display['expiry_date'] = pd.to_datetime(daily_display['expiry_date']).dt.strftime('%Y-%m-%d')
+                
+                # Round numeric columns
+                numeric_columns = ['entry_price', 'expiry_price', 'one_day_pct_move', 'expiry_pct_move', 
+                                 'option_gains', 'option_price', 'underlying_pnl', 'current_pnl']
+                for col in numeric_columns:
+                    if col in daily_display.columns:
+                        daily_display[col] = daily_display[col].round(2)
+                
+                # Format strike_prices column if it exists
+                if 'strike_prices' in daily_display.columns:
+                    daily_display['strike_prices'] = daily_display['strike_prices'].apply(
+                        lambda x: f"{x[0]:.2f}" if isinstance(x, list) and len(x) > 0 else str(x)
+                    )
+                
+                # Display with pagination
+                st.dataframe(
+                    daily_display,
+                    use_container_width=True,
+                    height=400,
+                    hide_index=True
+                )
+                
+                # Add download button for daily data
+                csv_daily = daily_display.to_csv(index=False)
+                st.download_button(
+                    label="Download Daily Trade Data",
+                    data=csv_daily,
+                    file_name=f"{st.session_state.strategy_name}_{st.session_state.crypto_name}_daily_trades.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("Daily trade data not available")
+        
+        with table_col2:
+            st.markdown("**Weekday Performance Summary**")
+            
+            if hasattr(st.session_state, 'weekday_df') and st.session_state.weekday_df is not None:
+                # Format the weekday_df for better display
+                weekday_display = st.session_state.weekday_df.copy()
+                
+                # Round numeric columns
+                numeric_columns = ['hits', 'losses', 'option_price', 'profit', 'total_profit', 'percentage_returns']
+                for col in numeric_columns:
+                    if col in weekday_display.columns:
+                        weekday_display[col] = weekday_display[col].round(2)
+                
+                # Style the dataframe to highlight the average row
+                def highlight_average_row(row):
+                    if row['day_of_week'] == 'Average':
+                        return ['background-color: #f0f2f6; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+                
+                styled_weekday = weekday_display.style.apply(highlight_average_row, axis=1)
+                
+                st.dataframe(
+                    styled_weekday,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Add download button for weekday data
+                csv_weekday = weekday_display.to_csv(index=False)
+                st.download_button(
+                    label="Download Weekday Summary",
+                    data=csv_weekday,
+                    file_name=f"{st.session_state.strategy_name}_{st.session_state.crypto_name}_weekday_summary.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("Weekday summary data not available")
     
     else:
         st.info("Configure strategy parameters with sidebar and click 'Run Backtest' to see results.")
